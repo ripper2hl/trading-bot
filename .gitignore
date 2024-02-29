@@ -71,3 +71,5 @@ jest/
 coverage/
 
 .DS_Store
+data
+.env
