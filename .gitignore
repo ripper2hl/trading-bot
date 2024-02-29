@@ -69,3 +69,5 @@ jest/
 
 # Archivos de cobertura de Jest
 coverage/
+
+.DS_Store
