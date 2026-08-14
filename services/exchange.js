@@ -137,8 +137,7 @@ async function marketOrder(side, amount, quoted) {
             logColor(colors.yellow, '[VERIFICACION] Consultando ordenes recientes para evitar duplicados...')
             const openOrders = await client.allOrders({ symbol: MARKET, limit: 5 })
             const recentFilled = openOrders.find(o =>
-                o.side === side && o.status === 'FILLED' &&
-                (Date.now() - o.time) < 30000
+                o.clientOrderId === orderObject.newClientOrderId
             )
             if (recentFilled) {
                 logColor(colors.yellow, `[VERIFICACION] Orden ${recentFilled.orderId} SI se ejecuto. Usando resultado existente.`)
@@ -188,13 +187,11 @@ const getPrice = async (symbol) => {
 const getQuantity = async (amount) => {
     const { symbols } = await client.exchangeInfo({ symbol: MARKET })
     const { stepSize } = symbols[0].filters.find(filter => filter.filterType === 'LOT_SIZE')
-    let quantity = (amount / stepSize).toFixed(symbols[0].baseAssetPrecision)
+    const precision = symbols[0].baseAssetPrecision
 
-    if (amount % stepSize !== 0) {
-        quantity = (parseInt(quantity) * stepSize).toFixed(symbols[0].baseAssetPrecision)
-    }
-
-    return quantity
+    const steps = Math.floor(Number(amount) / Number(stepSize))
+    const safeQuantity = Number(steps * Number(stepSize))
+    return safeQuantity.toFixed(precision)
 }
 
 async function getMinBuy() {
