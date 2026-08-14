@@ -12,6 +12,13 @@ const { NotifyTelegram } = require('./TelegramNotify')
 
 // === ORDENES ===
 
+function generateClientOrderId(side) {
+    const marker = `${MARKET}-${side}`
+    const timePart = Date.now().toString(36)
+    const randomPart = Math.random().toString(36).slice(2, 8)
+    return `${marker}-${timePart}-${randomPart}`.slice(0, 36)
+}
+
 async function marketBuy(amount, quoted) {
     return await marketOrder('BUY', amount, quoted)
 }
@@ -25,6 +32,7 @@ async function marketOrder(side, amount, quoted) {
         symbol: MARKET,
         side: side,
         type: 'MARKET',
+        newClientOrderId: generateClientOrderId(side),
     }
 
     if (quoted)
