@@ -5,7 +5,8 @@
  */
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
-    SELL_PERCENT, MAX_POSITION_PERCENT, FEE_RATE, TRAILING_TP_PERCENT
+    SELL_PERCENT, MAX_POSITION_PERCENT, FEE_RATE, TRAILING_TP_PERCENT,
+    GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO
 } = require('../config/constants')
 const { log, logColor, colors } = require('../utils/logger')
 const { store, _newPriceReset, _calculateProfits } = require('../services/state')
@@ -25,7 +26,7 @@ function isDrawdownKilled() {
 // === EVALUACION DE ORDENES ===
 
 function getOrderId() {
-    const fifoStrategy = process.env.STOP_LOSS_GRID_IS_FIFO
+    const fifoStrategy = GRID_STOP_LOSS_FIFO
     const orders = store.get('orders')
     const index = fifoStrategy ? 0 : orders.length - 1
     return orders[index].id
@@ -39,7 +40,7 @@ function getToSold(price, changeStatus) {
         var order = orders[i]
 
         // Condicion de Stop-Loss de Grid
-        const isStopLossHit = process.env.USE_STOP_LOSS_GRID
+        const isStopLossHit = GRID_STOP_LOSS_ENABLED
             && getOrderId() === order.id
             && store.get(`${MARKET2.toLowerCase()}_balance`) < BUY_ORDER_AMOUNT
             && price < order.sl_price
@@ -116,7 +117,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
         const targetNetPercent = SELL_PERCENT / 100
         const netMultiplier = (1 + targetNetPercent) / ((1 - FEE_RATE) * (1 - FEE_RATE))
         const targetSellPrice = price * netMultiplier
-        var slFactor = parseFloat(process.env.STOP_LOSS_GRID || 0.6) * price / 100
+        var slFactor = GRID_STOP_LOSS_PERCENT * price / 100
 
         const order = {
             buy_price: price,

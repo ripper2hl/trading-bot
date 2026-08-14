@@ -6,12 +6,12 @@ const originalArgv = process.argv.slice()
 const originalEnv = { ...process.env }
 
 process.argv = ['node', 'app.js', 'ETH', 'USDT', '40']
-process.env.API_KEY = 'abc123'
-process.env.API_SECRET = 'secret456'
+process.env.BINANCE_API_KEY = 'abc123'
+process.env.BINANCE_API_SECRET = 'secret456'
 process.env.BUY_PERCENT = '1'
 process.env.SELL_PERCENT = '2'
-process.env.STOP_LOSS_BOT = '2'
-process.env.TAKE_PROFIT_BOT = '5'
+process.env.STOP_LOSS_PERCENT = '2'
+process.env.TAKE_PROFIT_PERCENT = '5'
 
 async function runTest(label, fn) {
   try {

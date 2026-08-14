@@ -4,7 +4,10 @@
  * Encapsula ordenes, consultas de precio, saldos y cantidades.
  */
 const client = require('./binance')
-const { MARKET, MARKET1, MARKET2, DRY_RUN, FEE_RATE } = require('../config/constants')
+const {
+    MARKET, MARKET1, MARKET2, DRY_RUN, FEE_RATE,
+    DEFAULT_WITHDRAW_NETWORK, WITHDRAW_ADDRESS_BUSD, WITHDRAW_ADDRESS_USDT, POLL_INTERVAL_MS
+} = require('../config/constants')
 const { log, logColor, logTrade, colors } = require('../utils/logger')
 const { withBackoff } = require('../utils/network')
 const { store, elapsedTime } = require('./state')
@@ -234,24 +237,23 @@ async function getFees({ commission, commissionAsset }) {
 
 async function withdraw(profits, price) {
     const { sleep } = require('../utils/network')
-    const { SLEEP_TIME } = require('../config/constants')
 
     await _sellAll()
     console.log('Procesando retiro...')
-    await sleep(SLEEP_TIME * 2)
+    await sleep(POLL_INTERVAL_MS * 2)
 
     await client.withdraw({
         coin: MARKET2,
-        network: process.env.DEFAULT_WITHDRAW_NETWORK,
+        network: DEFAULT_WITHDRAW_NETWORK,
         address: MARKET2 === 'BUSD'
-            ? process.env.WITHDRAW_ADDRESS_BUSD
-            : process.env.WITHDRAW_ADDRESS_USDT,
+            ? WITHDRAW_ADDRESS_BUSD
+            : WITHDRAW_ADDRESS_USDT,
         amount: profits,
     })
 
     store.put('withdrawal_profits', parseFloat(store.get('withdrawal_profits')) + profits)
     console.log('Cerrando bot...')
-    await sleep(SLEEP_TIME * 2)
+    await sleep(POLL_INTERVAL_MS * 2)
 }
 
 // === OPERACIONES DE CICLO DE VIDA ===

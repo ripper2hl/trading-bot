@@ -5,8 +5,12 @@
  */
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
-    BUY_PERCENT, SELL_PERCENT, STOP_LOSS_BOT, TAKE_PROFIT_BOT,
-    DRY_RUN, DRAWDOWN_KILL_PERCENT, TRAILING_TP_PERCENT, SLEEP_TIME,
+    BUY_PERCENT, SELL_PERCENT, STOP_LOSS_PERCENT, TAKE_PROFIT_PERCENT,
+    DRY_RUN, DRAWDOWN_KILL_PERCENT, TRAILING_TP_PERCENT, POLL_INTERVAL_MS,
+    NOTIFY_TELEGRAM_ENABLED, NOTIFY_TELEGRAM_ON,
+    SELL_ALL_ON_CLOSE, SELL_ALL_ON_START, START_AGAIN,
+    WITHDRAW_PROFITS_ENABLED, MIN_WITHDRAW_AMOUNT,
+    GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO,
     validateBootstrapConfig
 } = require('./config/constants')
 const client = require('./services/binance')
@@ -28,12 +32,12 @@ const moment = require('moment')
 // === NOTIFICACIONES ===
 
 function canNotifyTelegram(from) {
-    return Boolean(process.env.NOTIFY_TELEGRAM_ON && process.env.NOTIFY_TELEGRAM_ON.includes(from))
+    return Boolean(NOTIFY_TELEGRAM_ON && NOTIFY_TELEGRAM_ON.includes(from))
 }
 
 function _notifyTelegram(price, from) {
     moment.locale('es')
-    if (process.env.NOTIFY_TELEGRAM && canNotifyTelegram(from)) {
+    if (NOTIFY_TELEGRAM_ENABLED && canNotifyTelegram(from)) {
         try {
             NotifyTelegram({
                 runningTime: elapsedTime(),
@@ -113,16 +117,16 @@ async function broadcast() {
                         : 0
                     log(`Withdrawal profits: ${parseFloat(store.get('withdrawal_profits')).toFixed(2)} ${MARKET2}`)
                     logColor(totalProfits < 0 ? colors.red : totalProfits == 0 ? colors.gray : colors.green,
-                        `Real Profits [SL = ${STOP_LOSS_BOT}%, TP = ${TAKE_PROFIT_BOT}%]: ${totalProfitsPercent}% ==> ${totalProfits <= 0 ? '' : '+'}${parseFloat(totalProfits).toFixed(3)} ${MARKET2}`)
+                        `Real Profits [SL = ${STOP_LOSS_PERCENT}%, TP = ${TAKE_PROFIT_PERCENT}%]: ${totalProfitsPercent}% ==> ${totalProfits <= 0 ? '' : '+'}${parseFloat(totalProfits).toFixed(3)} ${MARKET2}`)
 
-                    if (totalProfitsPercent >= TAKE_PROFIT_BOT) {
+                    if (totalProfitsPercent >= TAKE_PROFIT_PERCENT) {
                         logColor(colors.green, 'Cerrando bot en ganancias....')
-                        if (process.env.SELL_ALL_ON_CLOSE) {
-                            if (process.env.WITHDRAW_PROFITS
-                                && totalProfits >= parseFloat(process.env.MIN_WITHDRAW_AMOUNT)) {
+                        if (SELL_ALL_ON_CLOSE) {
+                            if (WITHDRAW_PROFITS_ENABLED
+                                && totalProfits >= MIN_WITHDRAW_AMOUNT) {
                                 await withdraw(totalProfits, marketPrice)
                                 _notifyTelegram(marketPrice, 'withdraw')
-                                if (process.env.START_AGAIN) {
+                                if (START_AGAIN) {
                                     await sleep(5000)
                                     await updateBalances()
                                 } else {
@@ -137,9 +141,9 @@ async function broadcast() {
                         } else {
                             return
                         }
-                    } else if (totalProfitsPercent <= -STOP_LOSS_BOT) {
+                    } else if (totalProfitsPercent <= -STOP_LOSS_PERCENT) {
                         logColor(colors.red, 'Cerrando bot en pérdidas....')
-                        if (process.env.SELL_ALL_ON_CLOSE)
+                        if (SELL_ALL_ON_CLOSE)
                             await _sellAll()
                         _closeBot()
                         return
@@ -189,10 +193,10 @@ async function broadcast() {
                     log(`Buy price: ${bOrder.buy_price} ${MARKET2}`)
                     log(`Sell price: ${bOrder.sell_price} ${MARKET2}`)
 
-                    if (process.env.USE_STOP_LOSS_GRID) {
-                        const slStrategy = process.env.STOP_LOSS_GRID_IS_FIFO ? 'FIFO' : 'LIFO'
+                    if (GRID_STOP_LOSS_ENABLED) {
+                        const slStrategy = GRID_STOP_LOSS_FIFO ? 'FIFO' : 'LIFO'
                         log(`SL price: ${bOrder.sl_price} ${MARKET2}, Strategy: ${slStrategy}`)
-                        log(`SL losses: ${parseFloat(store.get('sl_losses')).toFixed(3)}, Trigger price down: ${process.env.STOP_LOSS_GRID}%`)
+                        log(`SL losses: ${parseFloat(store.get('sl_losses')).toFixed(3)}, Trigger price down: ${GRID_STOP_LOSS_PERCENT}%`)
                     }
 
                     log(`Order amount: ${BUY_ORDER_AMOUNT} ${MARKET2} ==> ${bOrder.amount} ${MARKET1}`)
@@ -223,7 +227,7 @@ async function broadcast() {
                 logColor(colors.red, `[ERROR SYNC] No se pudo resincronizar saldos: ${syncErr.message || syncErr}`)
             }
         }
-        await sleep(SLEEP_TIME)
+        await sleep(POLL_INTERVAL_MS)
     }
 }
 
@@ -305,7 +309,7 @@ async function init() {
 
     if (process.argv[5] !== 'resume') {
         log('Iniciando bot...')
-        if (process.env.SELL_ALL_ON_START)
+        if (SELL_ALL_ON_START)
             await clearStart(_closeBot)
         const startTime = Date.now()
         store.put('start_time', startTime)

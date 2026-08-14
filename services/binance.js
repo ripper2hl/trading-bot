@@ -1,7 +1,11 @@
-const Binance = require('binance-api-node').default
-
-const isTestMode = process.env.TEST_MODE === 'true' || process.env.TEST_MODE === '1' || process.env.NODE_ENV === 'test'
-const isTestnet = process.env.USE_TESTNET === 'true' || process.env.USE_TESTNET === '1'
+/**
+ * services/binance.js
+ * Cliente de Binance API.
+ * Lee credenciales y flags de entorno desde config/constants.js (fuente unica).
+ */
+const {
+    BINANCE_API_KEY, BINANCE_API_SECRET, USE_TESTNET, TEST_MODE
+} = require('../config/constants')
 
 function createStubClient() {
     return {
@@ -25,17 +29,19 @@ function createStubClient() {
     }
 }
 
-if (isTestMode) {
+if (TEST_MODE) {
     console.log('[BINANCE] Test mode active: usando cliente stub')
     module.exports = createStubClient()
 } else {
+    const Binance = require('binance-api-node').default
+
     const clientOptions = {
-        apiKey: process.env.APIKEY,
-        apiSecret: process.env.SECRET,
+        apiKey: BINANCE_API_KEY,
+        apiSecret: BINANCE_API_SECRET,
         getTime: () => Date.now(),
     }
 
-    if (isTestnet) {
+    if (USE_TESTNET) {
         clientOptions.httpBase = 'https://testnet.binance.vision'
         clientOptions.wsBase = 'wss://testnet.binance.vision/ws'
         console.log('[BINANCE] Conectado a TESTNET (no se usan fondos reales)')
