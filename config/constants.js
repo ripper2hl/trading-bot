@@ -42,6 +42,7 @@ function validateBootstrapConfig() {
 
     const numericChecks = {
         BUY_PERCENT: process.env.BUY_PERCENT,
+        SELL_PERCENT: process.env.SELL_PERCENT,
         STOP_LOSS_BOT: process.env.STOP_LOSS_BOT,
         TAKE_PROFIT_BOT: process.env.TAKE_PROFIT_BOT,
         MAX_POSITION_PERCENT: process.env.MAX_POSITION_PERCENT,
@@ -51,10 +52,23 @@ function validateBootstrapConfig() {
         TRAILING_TP_PERCENT: process.env.TRAILING_TP_PERCENT,
     }
 
+    const positiveNumericKeys = new Set([
+        'BUY_PERCENT',
+        'SELL_PERCENT',
+        'STOP_LOSS_BOT',
+        'TAKE_PROFIT_BOT',
+        'MAX_POSITION_PERCENT',
+        'DRAWDOWN_KILL_PERCENT',
+    ])
+
     for (const [key, value] of Object.entries(numericChecks)) {
         if (value === undefined || value === null || value === '') continue
         if (!Number.isFinite(Number(value))) {
             errors.push(`La variable ${key} debe ser numérica.`)
+            continue
+        }
+        if (positiveNumericKeys.has(key) && Number(value) <= 0) {
+            errors.push(`La variable ${key} debe ser estrictamente mayor que 0.`)
         }
     }
 
@@ -66,6 +80,10 @@ function validateBootstrapConfig() {
 
 // === FLAGS DE PRODUCCION ===
 const DRY_RUN = process.env.DRY_RUN === 'true' || process.env.DRY_RUN === '1'
+const BUY_PERCENT = ensureValidNumeric(process.env.BUY_PERCENT, 'BUY_PERCENT', 1)
+const SELL_PERCENT = ensureValidNumeric(process.env.SELL_PERCENT, 'SELL_PERCENT', 2)
+const STOP_LOSS_BOT = ensureValidNumeric(process.env.STOP_LOSS_BOT, 'STOP_LOSS_BOT', 2)
+const TAKE_PROFIT_BOT = ensureValidNumeric(process.env.TAKE_PROFIT_BOT, 'TAKE_PROFIT_BOT', 5)
 const MAX_POSITION_PERCENT = ensureValidNumeric(process.env.MAX_POSITION_PERCENT, 'MAX_POSITION_PERCENT', 5)
 const DRAWDOWN_KILL_PERCENT = ensureValidNumeric(process.env.DRAWDOWN_KILL_PERCENT, 'DRAWDOWN_KILL_PERCENT', 10)
 const TRAILING_TP_PERCENT = ensureValidNumeric(process.env.TRAILING_TP_PERCENT, 'TRAILING_TP_PERCENT', 0)
@@ -77,6 +95,10 @@ module.exports = {
     MARKET2,
     MARKET,
     BUY_ORDER_AMOUNT,
+    BUY_PERCENT,
+    SELL_PERCENT,
+    STOP_LOSS_BOT,
+    TAKE_PROFIT_BOT,
     DRY_RUN,
     MAX_POSITION_PERCENT,
     DRAWDOWN_KILL_PERCENT,

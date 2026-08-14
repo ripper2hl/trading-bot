@@ -5,7 +5,7 @@
  */
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
-    MAX_POSITION_PERCENT, FEE_RATE, TRAILING_TP_PERCENT
+    SELL_PERCENT, MAX_POSITION_PERCENT, FEE_RATE, TRAILING_TP_PERCENT
 } = require('../config/constants')
 const { log, logColor, colors } = require('../utils/logger')
 const { store, _newPriceReset, _calculateProfits } = require('../services/state')
@@ -32,7 +32,7 @@ function getOrderId() {
 }
 
 function getToSold(price, changeStatus) {
-    const orders = store.get('orders')
+    const orders = Array.isArray(store.get('orders')) ? store.get('orders') : []
     const toSold = []
 
     for (var i = 0; i < orders.length; i++) {
@@ -94,17 +94,26 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
     }
 
     const currentBalance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`))
-
+    const orders = store.get('orders') || []
+    const totalExposure = orders
+        .filter(order => order && order.status === 'bought')
+        .reduce((sum, order) => {
+            const orderAmount = parseFloat(order.amount) || 0
+            const orderPrice = parseFloat(order.buy_price) || 0
+            return sum + (orderAmount * orderPrice)
+        }, 0)
     const maxAllowed = currentBalance * (MAX_POSITION_PERCENT / 100)
-    if (parseFloat(BUY_ORDER_AMOUNT) > maxAllowed) {
-        logColor(colors.yellow, `[POSICION] Orden de ${BUY_ORDER_AMOUNT} ${MARKET2} excede el ${MAX_POSITION_PERCENT}% del balance (${maxAllowed.toFixed(2)} ${MARKET2}). Orden bloqueada.`)
+    const projectedExposure = totalExposure + parseFloat(BUY_ORDER_AMOUNT)
+
+    if (projectedExposure > maxAllowed) {
+        logColor(colors.yellow, `[POSICION] Exposicion proyectada ${projectedExposure.toFixed(2)} ${MARKET2} excede el ${MAX_POSITION_PERCENT}% del balance (${maxAllowed.toFixed(2)} ${MARKET2}). Orden bloqueada.`)
         return
     }
 
     if (currentBalance >= BUY_ORDER_AMOUNT) {
-        var orders = store.get('orders')
+        const activeOrders = store.get('orders') || []
 
-        const targetNetPercent = parseFloat(process.env.SELL_PERCENT) / 100
+        const targetNetPercent = SELL_PERCENT / 100
         const netMultiplier = (1 + targetNetPercent) / ((1 - FEE_RATE) * (1 - FEE_RATE))
         const targetSellPrice = price * netMultiplier
         var slFactor = parseFloat(process.env.STOP_LOSS_GRID || 0.6) * price / 100
@@ -121,7 +130,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
         }
 
         log(`
-            Buying ${MARKET1} (Target Net Profit: ${process.env.SELL_PERCENT}%)
+            Buying ${MARKET1} (Target Net Profit: ${SELL_PERCENT}%)
             ==================
             amountIn: ${parseFloat(BUY_ORDER_AMOUNT).toFixed(2)} ${MARKET2}
             amountOut: ${(BUY_ORDER_AMOUNT / price).toFixed(6)} ${MARKET1}
@@ -137,7 +146,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             store.put('fees', parseFloat(store.get('fees')) + order.buy_fee)
             order.buy_price = parseFloat(res.fills[0].price)
 
-            orders.push(order)
+            activeOrders.push(order)
             store.put('start_price', order.buy_price)
             await updateBalancesFn()
 
@@ -200,20 +209,29 @@ async function _sell(price, updateBalancesFn, notifyFn) {
             const res = await marketSell(lotQuantity)
             if (res && res.status === 'FILLED') {
                 const _price = parseFloat(res.fills[0].price)
+                let remainingToSell = amountToSell
 
                 for (var i = 0; i < orders.length; i++) {
                     var order = orders[i]
                     for (var j = 0; j < toSold.length; j++) {
                         if (order.id == toSold[j].id) {
-                            toSold[j].profit = (parseFloat(toSold[j].amount) * _price)
-                                - (parseFloat(toSold[j].amount) * parseFloat(toSold[j].buy_price))
+                            const orderAmount = parseFloat(order.amount) || 0
+                            if (remainingToSell <= 0) break
 
-                            toSold[j].sell_fee = parseFloat((await getFees(res.fills[0])))
-                            toSold[j].profit -= (toSold[j].sell_fee + toSold[j].buy_fee)
-                            toSold[j].status = 'sold'
-                            orders[i] = toSold[j]
-                            store.put('fees', parseFloat(store.get('fees')) + orders[i].sell_fee)
-                            store.put('sl_losses', parseFloat(store.get('sl_losses')) + orders[i].profit)
+                            const sellableAmount = Math.min(orderAmount, remainingToSell)
+                            if (sellableAmount >= orderAmount) {
+                                toSold[j].profit = (orderAmount * _price) - (orderAmount * parseFloat(toSold[j].buy_price))
+                                toSold[j].sell_fee = parseFloat((await getFees(res.fills[0])))
+                                toSold[j].profit -= (toSold[j].sell_fee + toSold[j].buy_fee)
+                                toSold[j].status = 'sold'
+                                orders[i] = toSold[j]
+                                store.put('fees', parseFloat(store.get('fees')) + orders[i].sell_fee)
+                                store.put('sl_losses', parseFloat(store.get('sl_losses')) + orders[i].profit)
+                                remainingToSell -= orderAmount
+                            } else {
+                                logColor(colors.gray, `[PARTIAL] Venta parcial detectada para ${order.id}: ${sellableAmount.toFixed(6)} ${MARKET1} cubiertos; el resto queda pendiente.`)
+                                remainingToSell = 0
+                            }
                         }
                     }
                 }

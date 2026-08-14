@@ -31,14 +31,14 @@ async function _updateBalances(getBalances) {
 }
 
 function _calculateProfits() {
-    const orders = store.get('orders')
-    const sold = orders.filter(order => order.status === 'sold')
+    const orders = Array.isArray(store.get('orders')) ? store.get('orders') : []
+    const sold = orders.filter(order => order && order.status === 'sold')
 
     const totalSoldProfits = sold.length > 0 ?
         sold.map(order => order.profit).reduce((prev, next) =>
             parseFloat(prev) + parseFloat(next)) : 0
 
-    store.put('profits', totalSoldProfits + parseFloat(store.get('profits')))
+    store.put('profits', totalSoldProfits + parseFloat(store.get('profits') || 0))
 }
 
 function getRealProfits(price) {

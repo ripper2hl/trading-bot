@@ -5,6 +5,7 @@
  */
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
+    BUY_PERCENT, SELL_PERCENT, STOP_LOSS_BOT, TAKE_PROFIT_BOT,
     DRY_RUN, DRAWDOWN_KILL_PERCENT, TRAILING_TP_PERCENT, SLEEP_TIME,
     validateBootstrapConfig
 } = require('./config/constants')
@@ -32,20 +33,36 @@ function canNotifyTelegram(from) {
 
 function _notifyTelegram(price, from) {
     moment.locale('es')
-    if (process.env.NOTIFY_TELEGRAM && canNotifyTelegram(from))
-        NotifyTelegram({
-            runningTime: elapsedTime(),
-            market: MARKET,
-            market1: MARKET1,
-            market2: MARKET2,
-            price: price,
-            balance1: store.get(`${MARKET1.toLowerCase()}_balance`),
-            balance2: store.get(`${MARKET2.toLowerCase()}_balance`),
-            gridProfits: parseFloat(store.get('profits')).toFixed(4),
-            realProfits: getRealProfits(price),
-            start: moment(store.get('start_time')).format('DD/MM/YYYY HH:mm'),
-            from
-        })
+    if (process.env.NOTIFY_TELEGRAM && canNotifyTelegram(from)) {
+        try {
+            NotifyTelegram({
+                runningTime: elapsedTime(),
+                market: MARKET,
+                market1: MARKET1,
+                market2: MARKET2,
+                price: price,
+                balance1: store.get(`${MARKET1.toLowerCase()}_balance`),
+                balance2: store.get(`${MARKET2.toLowerCase()}_balance`),
+                gridProfits: parseFloat(store.get('profits')).toFixed(4),
+                realProfits: getRealProfits(price),
+                start: moment(store.get('start_time')).format('DD/MM/YYYY HH:mm'),
+                from
+            })
+        } catch (err) {
+            logColor(colors.red, `[TELEGRAM] No se pudo enviar notificación: ${err.message || err}`)
+        }
+    }
+}
+
+async function emergencyCleanUp(symbol = MARKET) {
+    if (!symbol) return
+
+    try {
+        await client.cancelOpenOrders({ symbol })
+        logColor(colors.yellow, `[RISK] Órdenes abiertas canceladas con éxito para ${symbol}.`)
+    } catch (err) {
+        logColor(colors.yellow, `[RISK] emergencyCleanUp no pudo cancelar órdenes de ${symbol}: ${err.message || err}`)
+    }
 }
 
 // Helper: actualizar balances pasando getBalances como dependencia
@@ -63,6 +80,7 @@ async function broadcast() {
             } catch (balanceErr) {
                 logColor(colors.red, `[CRITICAL] Reconciliacion de saldos fallida: ${balanceErr.message || balanceErr}`)
                 _notifyTelegram(null, 'risk')
+                await emergencyCleanUp()
                 process.exit(1)
             }
 
@@ -77,29 +95,27 @@ async function broadcast() {
                 log('===========================================================')
                 const totalProfits = getRealProfits(marketPrice)
 
-                // === KILL-SWITCH DE DRAWDOWN 24h ===
-                const elapsedMs = Date.now() - store.get('start_time')
-                const within24h = elapsedMs <= 86400000
-                if (within24h && !isNaN(totalProfits)) {
-                    const initialBal = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`))
+                const initialBal = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
+                if (initialBal > 0 && !isNaN(totalProfits)) {
                     const drawdownPercent = parseFloat((-100 * totalProfits / initialBal).toFixed(3))
                     if (drawdownPercent >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
                         setDrawdownKilled(true)
-                        logColor(colors.red, `[KILL-SWITCH] Drawdown de ${drawdownPercent}% en 24h supera el limite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
+                        logColor(colors.red, `[KILL-SWITCH] Drawdown de ${drawdownPercent}% supera el limite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
                         logColor(colors.red, '[KILL-SWITCH] Se requiere intervencion manual para reanudar.')
                         _notifyTelegram(marketPrice, 'sell')
                     }
                 }
 
                 if (!isNaN(totalProfits)) {
-                    const totalProfitsPercent = parseFloat(
-                        100 * totalProfits / store.get(`initial_${MARKET2.toLowerCase()}_balance`)
-                    ).toFixed(3)
+                    const initialProfitBalance = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
+                    const totalProfitsPercent = initialProfitBalance > 0
+                        ? parseFloat((100 * totalProfits / initialProfitBalance).toFixed(3))
+                        : 0
                     log(`Withdrawal profits: ${parseFloat(store.get('withdrawal_profits')).toFixed(2)} ${MARKET2}`)
                     logColor(totalProfits < 0 ? colors.red : totalProfits == 0 ? colors.gray : colors.green,
-                        `Real Profits [SL = ${process.env.STOP_LOSS_BOT}%, TP = ${process.env.TAKE_PROFIT_BOT}%]: ${totalProfitsPercent}% ==> ${totalProfits <= 0 ? '' : '+'}${parseFloat(totalProfits).toFixed(3)} ${MARKET2}`)
+                        `Real Profits [SL = ${STOP_LOSS_BOT}%, TP = ${TAKE_PROFIT_BOT}%]: ${totalProfitsPercent}% ==> ${totalProfits <= 0 ? '' : '+'}${parseFloat(totalProfits).toFixed(3)} ${MARKET2}`)
 
-                    if (totalProfitsPercent >= parseFloat(process.env.TAKE_PROFIT_BOT)) {
+                    if (totalProfitsPercent >= TAKE_PROFIT_BOT) {
                         logColor(colors.green, 'Cerrando bot en ganancias....')
                         if (process.env.SELL_ALL_ON_CLOSE) {
                             if (process.env.WITHDRAW_PROFITS
@@ -121,7 +137,7 @@ async function broadcast() {
                         } else {
                             return
                         }
-                    } else if (totalProfitsPercent <= -1 * process.env.STOP_LOSS_BOT) {
+                    } else if (totalProfitsPercent <= -STOP_LOSS_BOT) {
                         logColor(colors.red, 'Cerrando bot en pérdidas....')
                         if (process.env.SELL_ALL_ON_CLOSE)
                             await _sellAll()
@@ -147,7 +163,7 @@ async function broadcast() {
                         `New price: ${marketPrice} ${MARKET2} ==> -${parseFloat(percent).toFixed(3)}%`)
                     store.put('percent', `-${parseFloat(percent).toFixed(3)}`)
 
-                    if (percent >= process.env.BUY_PERCENT)
+                    if (percent >= BUY_PERCENT)
                         await _buy(marketPrice, BUY_ORDER_AMOUNT, updateBalances, _notifyTelegram)
                 } else {
                     const factor = (marketPrice - startPrice)
@@ -211,6 +227,27 @@ async function broadcast() {
     }
 }
 
+// === RECUPERACION DE PENDINGS ===
+
+async function recoverPendingIntent(intent, { store, getBalances }) {
+    const balances = await getBalances()
+
+    if (MARKET1) store.put(`${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
+    if (MARKET2) store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
+
+    if (intent && intent.side === 'BUY') {
+        const price = parseFloat(intent.price || 0)
+        if (price > 0) {
+            store.put('start_price', price)
+            store.put('entry_price', price)
+        }
+        if (MARKET1) store.put(`initial_${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
+        if (MARKET2) store.put(`initial_${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
+    }
+
+    return balances
+}
+
 // === INICIALIZACION ===
 
 async function init() {
@@ -231,15 +268,8 @@ async function init() {
                     console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} confirmado en Binance. Reconciliando estado local.`)
                     updateIntent(intent.clientOrderId, 'CONFIRMED')
                     const price = parseFloat(order.fills?.[0]?.price || 0)
-                    if (price > 0) {
-                        const balances = await getBalances()
-                        store.put('start_price', price)
-                        store.put('entry_price', price)
-                        store.put(`${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
-                        store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
-                        store.put(`initial_${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
-                        store.put(`initial_${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
-                    }
+                    intent.price = price
+                    await recoverPendingIntent(intent, { store, getBalances })
                     logColor(colors.yellow, `[BOOTSTRAP] Crash recuperado. Orden ${intent.clientOrderId} ejecutada offline.`)
                 } else {
                     updateIntent(intent.clientOrderId, 'FAILED')
@@ -261,6 +291,7 @@ async function init() {
 
                 console.error('[BOOTSTRAP] No se pudo reconciliar el intent pendiente:', err.message || err)
                 console.error('[BOOTSTRAP] Estado en cuarentena: intervención manual requerida.')
+                await emergencyCleanUp()
                 process.exit(1)
             }
         }
@@ -300,4 +331,11 @@ async function init() {
     broadcast()
 }
 
-init()
+if (require.main === module) {
+    init()
+}
+
+module.exports = {
+    recoverPendingIntent,
+    init,
+}

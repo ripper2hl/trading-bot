@@ -10,6 +10,7 @@ if (!fs.existsSync(dataDir)) {
 }
 
 const db = new Database(ledgerPath)
+db.pragma('journal_mode = WAL')
 
 db.exec(`
     CREATE TABLE IF NOT EXISTS order_intents (
@@ -69,11 +70,22 @@ function getIntent(clientOrderId) {
     return statement.get(clientOrderId)
 }
 
+function purgeOldIntents(maxAgeMs = 7 * 24 * 60 * 60 * 1000) {
+    const cutoff = Date.now() - maxAgeMs
+    const statement = db.prepare(`
+        DELETE FROM order_intents
+        WHERE status != 'PENDING' AND timestamp < ?
+    `)
+
+    return statement.run(cutoff).changes
+}
+
 module.exports = {
     logIntent,
     updateIntent,
     getPendingIntents,
     getIntent,
+    purgeOldIntents,
     db,
     ledgerPath,
 }

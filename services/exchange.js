@@ -118,6 +118,13 @@ async function marketOrder(side, amount, quoted) {
                 logColor(colors.red, `[RISK] No se pudo enviar la alarma de Partial Fill: ${notifyErr.message || notifyErr}`)
             }
 
+            try {
+                await client.cancelOpenOrders({ symbol: MARKET })
+                logColor(colors.yellow, `[RISK] Cuarentena activada: órdenes abiertas de ${MARKET} canceladas antes del exit.`)
+            } catch (cancelErr) {
+                logColor(colors.red, `[RISK] No se pudieron cancelar las órdenes abiertas antes del exit: ${cancelErr.message || cancelErr}`)
+            }
+
             process.exit(1)
         }
 
@@ -181,6 +188,10 @@ const getBalances = async () => {
 }
 
 const getPrice = async (symbol) => {
+    if (!symbol || typeof symbol !== 'string' || !/^[A-Za-z0-9\-._]+$/.test(symbol)) {
+        return null
+    }
+
     try {
         const prices = await withBackoff(() => client.prices({ symbol }))
         if (prices && prices[symbol]) {
@@ -211,6 +222,12 @@ async function getMinBuy() {
 
 async function getFees({ commission, commissionAsset }) {
     if (commissionAsset === MARKET2) return commission
+    if (commissionAsset === 'BNB') {
+        const pair = MARKET2 ? `BNB${MARKET2}` : 'BNBUSDT'
+        const bnbPrice = await getPrice(pair)
+        if (bnbPrice && Number(bnbPrice) > 0) return Number(commission) * Number(bnbPrice)
+        return Number(commission)
+    }
     const price = await getPrice(MARKET)
     return price * commission
 }
