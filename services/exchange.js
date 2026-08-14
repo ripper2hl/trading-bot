@@ -9,6 +9,7 @@ const { log, logColor, logTrade, colors } = require('../utils/logger')
 const { withBackoff } = require('../utils/network')
 const { store, elapsedTime } = require('./state')
 const { NotifyTelegram } = require('./TelegramNotify')
+const { logIntent, updateIntent } = require('./ledger')
 
 // === ORDENES ===
 
@@ -39,6 +40,8 @@ async function marketOrder(side, amount, quoted) {
         orderObject['quoteOrderQty'] = amount
     else
         orderObject['quantity'] = amount
+
+    logIntent(orderObject)
 
     // === DRY-RUN: simula la orden sin ejecutarla, pero actualiza el estado local ===
     if (DRY_RUN) {
@@ -118,6 +121,7 @@ async function marketOrder(side, amount, quoted) {
         }
 
         if (res && res.status === 'FILLED') {
+            updateIntent(orderObject.newClientOrderId, 'CONFIRMED')
             logTrade(side, {
                 symbol: MARKET,
                 quantity: res.executedQty,
@@ -126,6 +130,10 @@ async function marketOrder(side, amount, quoted) {
                 commission: res.fills[0].commission,
                 commissionAsset: res.fills[0].commissionAsset
             })
+        }
+
+        if (res && res.status === 'REJECTED') {
+            updateIntent(orderObject.newClientOrderId, 'FAILED')
         }
 
         return res

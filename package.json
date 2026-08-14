@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "axios": "^0.26.1",
+    "better-sqlite3": "^13.0.3",
     "binance-api-node": "^0.12.9",
     "comma-number": "^2.1.0",
     "dotenv": "^16.4.7",

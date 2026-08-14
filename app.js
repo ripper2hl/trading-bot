@@ -8,6 +8,7 @@ const {
     DRY_RUN, DRAWDOWN_KILL_PERCENT, TRAILING_TP_PERCENT, SLEEP_TIME,
     validateBootstrapConfig
 } = require('./config/constants')
+const client = require('./services/binance')
 const { log, logColor, colors } = require('./utils/logger')
 const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
@@ -17,6 +18,7 @@ const {
 const {
     getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw
 } = require('./services/exchange')
+const { getPendingIntents, updateIntent } = require('./services/ledger')
 const {
     _buy, _sell, getToSold, setDrawdownKilled, isDrawdownKilled
 } = require('./controllers/tradingEngine')
@@ -217,6 +219,37 @@ async function init() {
         console.error('[BOOTSTRAP] El arranque ha sido bloqueado por configuración inválida:')
         validation.errors.forEach(error => console.error(`  - ${error}`))
         process.exit(1)
+    }
+
+    const pendingIntents = getPendingIntents()
+    if (pendingIntents.length > 0) {
+        console.error('[BOOTSTRAP] Detectados intents PENDING en el ledger: posible crash detectado.')
+        for (const intent of pendingIntents) {
+            try {
+                const order = await client.getOrder({ symbol: MARKET, orderId: intent.clientOrderId })
+                if (order && (order.status === 'FILLED' || order.status === 'PARTIALLY_FILLED')) {
+                    console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} confirmado en Binance. Reconciliando estado local.`)
+                    updateIntent(intent.clientOrderId, 'CONFIRMED')
+                    const price = parseFloat(order.fills?.[0]?.price || 0)
+                    if (price > 0) {
+                        const balances = await getBalances()
+                        store.put('start_price', price)
+                        store.put('entry_price', price)
+                        store.put(`${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
+                        store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
+                        store.put(`initial_${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
+                        store.put(`initial_${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
+                    }
+                    logColor(colors.yellow, `[BOOTSTRAP] Crash recuperado. Orden ${intent.clientOrderId} ejecutada offline.`)
+                } else {
+                    updateIntent(intent.clientOrderId, 'FAILED')
+                }
+            } catch (err) {
+                console.error('[BOOTSTRAP] No se pudo reconciliar el intent pendiente:', err.message || err)
+                console.error('[BOOTSTRAP] Estado en cuarentena: intervención manual requerida.')
+                process.exit(1)
+            }
+        }
     }
 
     const minBuy = await getMinBuy()
