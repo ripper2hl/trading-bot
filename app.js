@@ -5,7 +5,8 @@
  */
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
-    DRY_RUN, DRAWDOWN_KILL_PERCENT, TRAILING_TP_PERCENT, SLEEP_TIME
+    DRY_RUN, DRAWDOWN_KILL_PERCENT, TRAILING_TP_PERCENT, SLEEP_TIME,
+    validateBootstrapConfig
 } = require('./config/constants')
 const { log, logColor, colors } = require('./utils/logger')
 const { sleep } = require('./utils/network')
@@ -203,6 +204,13 @@ async function broadcast() {
 // === INICIALIZACION ===
 
 async function init() {
+    const validation = validateBootstrapConfig()
+    if (!validation.ok) {
+        console.error('[BOOTSTRAP] El arranque ha sido bloqueado por configuración inválida:')
+        validation.errors.forEach(error => console.error(`  - ${error}`))
+        process.exit(1)
+    }
+
     const minBuy = await getMinBuy()
     if (minBuy > BUY_ORDER_AMOUNT) {
         console.log(`El lote mínimo de compra es: ${minBuy} ${MARKET2}`)
@@ -216,6 +224,10 @@ async function init() {
         const startTime = Date.now()
         store.put('start_time', startTime)
         const price = await getPrice(MARKET)
+        if (price === null || Number.isNaN(price)) {
+            console.error('[BOOTSTRAP] No se pudo obtener el precio inicial del mercado. Revisa la conexión a Binance y el símbolo.')
+            process.exit(1)
+        }
         store.put('start_price', price)
         store.put('orders', [])
         store.put('profits', 0)
