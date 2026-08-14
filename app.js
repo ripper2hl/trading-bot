@@ -12,7 +12,7 @@ const { log, logColor, colors } = require('./utils/logger')
 const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
-    store, elapsedTime, _updateBalances, getRealProfits, _logProfits, _closeBot
+    store, elapsedTime, _updateBalances, getRealProfits, _logProfits, _closeBot, reconcileBalances
 } = require('./services/state')
 const {
     getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw
@@ -25,7 +25,7 @@ const moment = require('moment')
 // === NOTIFICACIONES ===
 
 function canNotifyTelegram(from) {
-    return process.env.NOTIFY_TELEGRAM_ON.includes(from)
+    return Boolean(process.env.NOTIFY_TELEGRAM_ON && process.env.NOTIFY_TELEGRAM_ON.includes(from))
 }
 
 function _notifyTelegram(price, from) {
@@ -56,6 +56,14 @@ async function updateBalances() {
 async function broadcast() {
     while (true) {
         try {
+            try {
+                await reconcileBalances(getBalances, 1)
+            } catch (balanceErr) {
+                logColor(colors.red, `[CRITICAL] Reconciliacion de saldos fallida: ${balanceErr.message || balanceErr}`)
+                _notifyTelegram(null, 'risk')
+                process.exit(1)
+            }
+
             const mPrice = await getPrice(MARKET)
             if (mPrice) {
                 const startPrice = store.get('start_price')

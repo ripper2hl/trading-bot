@@ -70,6 +70,34 @@ function _logProfits(price) {
         `Current: ${parseFloat(m1Balance * price + m2Balance).toFixed(2)} ${MARKET2}, Initial: ${initialBalance.toFixed(2)} ${MARKET2}`)
 }
 
+async function reconcileBalances(getBalances, tolerancePercent = 1) {
+    const balances = await getBalances()
+    const localBase = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
+    const localQuote = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
+    const realBase = parseFloat(balances[MARKET1]) || 0
+    const realQuote = parseFloat(balances[MARKET2]) || 0
+
+    const baseMismatch = localBase > 0 ? Math.abs(realBase - localBase) / localBase * 100 : 0
+    const quoteMismatch = localQuote > 0 ? Math.abs(realQuote - localQuote) / localQuote * 100 : 0
+    const maxMismatch = Math.max(baseMismatch, quoteMismatch)
+
+    if (maxMismatch > tolerancePercent) {
+        const errorMessage = `[STATE MISMATCH] Desincronización grave detectada: ${MARKET1} local=${localBase}, real=${realBase}, drift=${baseMismatch.toFixed(2)}%; ${MARKET2} local=${localQuote}, real=${realQuote}, drift=${quoteMismatch.toFixed(2)}%; umbral=${tolerancePercent}%.`
+        logColor(colors.red, errorMessage)
+        throw new Error(errorMessage)
+    }
+
+    return {
+        localBase,
+        localQuote,
+        realBase,
+        realQuote,
+        baseMismatch,
+        quoteMismatch,
+        maxMismatch,
+    }
+}
+
 function _closeBot() {
     try {
         if (fs.existsSync(`./data/${MARKET}.json`)) {
@@ -88,5 +116,6 @@ module.exports = {
     _calculateProfits,
     getRealProfits,
     _logProfits,
+    reconcileBalances,
     _closeBot,
 }

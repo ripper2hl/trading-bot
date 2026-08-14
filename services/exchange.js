@@ -7,7 +7,8 @@ const client = require('./binance')
 const { MARKET, MARKET1, MARKET2, DRY_RUN, FEE_RATE } = require('../config/constants')
 const { log, logColor, logTrade, colors } = require('../utils/logger')
 const { withBackoff } = require('../utils/network')
-const { store } = require('./state')
+const { store, elapsedTime } = require('./state')
+const { NotifyTelegram } = require('./TelegramNotify')
 
 // === ORDENES ===
 
@@ -75,6 +76,38 @@ async function marketOrder(side, amount, quoted) {
 
     try {
         const res = await withBackoff(() => client.order(orderObject))
+
+        if (res && res.status === 'PARTIALLY_FILLED') {
+            const partialPrice = res.fills && res.fills[0] ? parseFloat(res.fills[0].price) : null
+            logColor(colors.red, `[RISK] Partial Fill detectado en ${MARKET} (${side}). Orden ${res.orderId} parcialmente ejecutada. Se cancela el remanente y se detiene la ejecución.`)
+            try {
+                await client.cancelOrder({ symbol: MARKET, orderId: res.orderId })
+                logColor(colors.yellow, `[RISK] Orden parcial cancelada: ${res.orderId}`)
+            } catch (cancelErr) {
+                logColor(colors.red, `[RISK] No se pudo cancelar la orden parcial ${res.orderId}: ${cancelErr.message || cancelErr}`)
+            }
+
+            try {
+                const currentPrice = partialPrice || await getPrice(MARKET)
+                await NotifyTelegram({
+                    runningTime: elapsedTime(),
+                    market: MARKET,
+                    market1: MARKET1,
+                    market2: MARKET2,
+                    price: currentPrice,
+                    balance1: store.get(`${MARKET1.toLowerCase()}_balance`),
+                    balance2: store.get(`${MARKET2.toLowerCase()}_balance`),
+                    gridProfits: parseFloat(store.get('profits') || 0).toFixed(4),
+                    realProfits: parseFloat(store.get('profits') || 0).toFixed(4),
+                    start: new Date(store.get('start_time') || Date.now()).toISOString(),
+                    from: 'risk'
+                })
+            } catch (notifyErr) {
+                logColor(colors.red, `[RISK] No se pudo enviar la alarma de Partial Fill: ${notifyErr.message || notifyErr}`)
+            }
+
+            process.exit(1)
+        }
 
         if (res && res.status === 'FILLED') {
             logTrade(side, {
