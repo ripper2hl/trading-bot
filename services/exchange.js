@@ -82,6 +82,7 @@ async function marketOrder(side, amount, quoted) {
 
         logTrade(`DRY_RUN_${side}`, { symbol: MARKET, quantity: simQty, price: simPrice, orderId: simResult.orderId, fee: simCommission })
         logColor(colors.yellow, `[DRY-RUN] Orden ${side} simulada: ${simQty.toFixed(6)} ${MARKET1} @ ${simPrice} ${MARKET2} (fee: ${simCommission.toFixed(6)} ${commissionAsset})`)
+        updateIntent(orderObject.newClientOrderId, 'CONFIRMED')
         return simResult
     }
 

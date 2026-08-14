@@ -226,7 +226,7 @@ async function init() {
         console.error('[BOOTSTRAP] Detectados intents PENDING en el ledger: posible crash detectado.')
         for (const intent of pendingIntents) {
             try {
-                const order = await client.getOrder({ symbol: MARKET, orderId: intent.clientOrderId })
+                const order = await client.getOrder({ symbol: MARKET, origClientOrderId: intent.clientOrderId })
                 if (order && (order.status === 'FILLED' || order.status === 'PARTIALLY_FILLED')) {
                     console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} confirmado en Binance. Reconciliando estado local.`)
                     updateIntent(intent.clientOrderId, 'CONFIRMED')
@@ -245,6 +245,20 @@ async function init() {
                     updateIntent(intent.clientOrderId, 'FAILED')
                 }
             } catch (err) {
+                const isOrderMissing = err && (
+                    err.code === -2013 ||
+                    (typeof err.message === 'string' && (
+                        err.message.includes('-2013') ||
+                        err.message.toLowerCase().includes('does not exist')
+                    ))
+                )
+
+                if (isOrderMissing) {
+                    console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} no existe en Binance. Marcando como FAILED y continuando.`)
+                    updateIntent(intent.clientOrderId, 'FAILED')
+                    continue
+                }
+
                 console.error('[BOOTSTRAP] No se pudo reconciliar el intent pendiente:', err.message || err)
                 console.error('[BOOTSTRAP] Estado en cuarentena: intervención manual requerida.')
                 process.exit(1)
