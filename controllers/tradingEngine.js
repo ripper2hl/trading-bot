@@ -260,6 +260,8 @@ async function _sell(price, updateBalancesFn, notifyFn) {
                     if (orders[i].status === 'sold')
                         orders.splice(i, 1)
 
+                store.put('orders', orders)
+
                 notifyFn(price, 'sell')
             } else {
                 logColor(colors.red, '[ADVERTENCIA] La venta no pudo completarse en Binance.')

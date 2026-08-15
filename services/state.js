@@ -34,11 +34,18 @@ function _calculateProfits() {
     const orders = Array.isArray(store.get('orders')) ? store.get('orders') : []
     const sold = orders.filter(order => order && order.status === 'sold')
 
-    const totalSoldProfits = sold.length > 0 ?
-        sold.map(order => order.profit).reduce((prev, next) =>
-            parseFloat(prev) + parseFloat(next)) : 0
+    if (sold.length > 0) {
+        const totalSoldProfits = sold
+            .map(order => order.profit)
+            .reduce((prev, next) => parseFloat(prev) + parseFloat(next), 0)
 
-    store.put('profits', totalSoldProfits + parseFloat(store.get('profits') || 0))
+        const currentProfits = parseFloat(store.get('profits') || 0)
+        store.put('profits', parseFloat((currentProfits + totalSoldProfits).toFixed(4)))
+
+        // Purga permanente de ordenes vendidas del store para evitar doble conteo
+        const remainingOrders = orders.filter(order => order && order.status !== 'sold')
+        store.put('orders', remainingOrders)
+    }
 }
 
 function getRealProfits(price) {
@@ -52,10 +59,17 @@ function getRealProfits(price) {
 }
 
 /**
- * Calcula el equity inicial total en unidades de MARKET2.
+ * Calcula el equity base de referencia en unidades de MARKET2.
  * Formula: initial_USDT + (initial_BTC * precio_actual)
- * Esto da el valor real de la cartera al momento de arranque,
- * incluyendo cualquier base asset preexistente (e.g. BTC regalado por Testnet).
+ *
+ * Usa precio_actual (no congelado) a proposito: el numerador getRealProfits()
+ * ya aisla el PnL de trading puro ((BTC_actual - BTC_inicial) * precio + USDT_actual - USDT_inicial),
+ * asi que al dividir entre este denominador obtenemos el porcentaje de PnL
+ * relativo al valor actual de la cartera, no al valor historico.
+ * Esto evita que un movimiento grande de BTC distorsione los % de drawdown/TP/SL.
+ *
+ * Invariante: si no hay trades, getRealProfits() = 0, por lo que el % siempre es 0%
+ * independientemente de cuanto cambie el precio — el BTC preexistente no genera PnL fantasma.
  */
 function getInitialEquity(price) {
     const initialBalance1 = parseFloat(store.get(`initial_${MARKET1.toLowerCase()}_balance`)) || 0
@@ -90,11 +104,20 @@ async function reconcileBalances(getBalances, tolerancePercent = 1) {
     const realBase = parseFloat(balances[MARKET1]) || 0
     const realQuote = parseFloat(balances[MARKET2]) || 0
 
-    const baseMismatch = localBase > 0 ? Math.abs(realBase - localBase) / localBase * 100 : 0
-    const quoteMismatch = localQuote > 0 ? Math.abs(realQuote - localQuote) / localQuote * 100 : 0
+    const absBaseDiff = Math.abs(realBase - localBase)
+    const absQuoteDiff = Math.abs(realQuote - localQuote)
+
+    const baseMismatch = localBase > 0
+        ? (absBaseDiff / localBase) * 100
+        : (realBase > 0 && absBaseDiff > 0.0001 ? 100 : 0)
+
+    const quoteMismatch = localQuote > 0
+        ? (absQuoteDiff / localQuote) * 100
+        : (realQuote > 0 && absQuoteDiff > 0.1 ? 100 : 0)
+
     const maxMismatch = Math.max(baseMismatch, quoteMismatch)
 
-    if (maxMismatch > tolerancePercent) {
+    if (maxMismatch > tolerancePercent || (localBase === 0 && realBase > 0.0001) || (localQuote === 0 && realQuote > 0.1)) {
         const errorMessage = `[STATE MISMATCH] Desincronización grave detectada: ${MARKET1} local=${localBase}, real=${realBase}, drift=${baseMismatch.toFixed(2)}%; ${MARKET2} local=${localQuote}, real=${realQuote}, drift=${quoteMismatch.toFixed(2)}%; umbral=${tolerancePercent}%.`
         logColor(colors.red, errorMessage)
         throw new Error(errorMessage)

@@ -242,14 +242,22 @@ async function recoverPendingIntent(intent, { store, getBalances }) {
     if (MARKET1) store.put(`${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
     if (MARKET2) store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
 
+    if (intent && intent.clientOrderId) {
+        updateIntent(intent.clientOrderId, 'CONFIRMED')
+    }
+
     if (intent && intent.side === 'BUY') {
         const price = parseFloat(intent.price || 0)
         if (price > 0) {
             store.put('start_price', price)
             store.put('entry_price', price)
         }
-        if (MARKET1) store.put(`initial_${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
-        if (MARKET2) store.put(`initial_${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
+        if (MARKET1 && store.get(`initial_${MARKET1.toLowerCase()}_balance`) === undefined) {
+            store.put(`initial_${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
+        }
+        if (MARKET2 && store.get(`initial_${MARKET2.toLowerCase()}_balance`) === undefined) {
+            store.put(`initial_${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
+        }
     }
 
     return balances

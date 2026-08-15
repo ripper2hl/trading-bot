@@ -216,6 +216,74 @@ resetPersistedStoreFile()
     assert.equal(freshTradingEngine.isDrawdownKilled(), true)
     assert.equal(store.get('drawdown_killed'), true)
   })
+
+  // === TESTS DE REGRESION: BUG DE GANANCIA FANTASMA (equity accounting) ===
+
+  await runTest('F - con BTC preexistente y precio sin cambios, totalProfitsPercent = 0% (no +630%)', async () => {
+    resetStoreState(store)
+    // Simula arranque con 1 ETH + 10000 USDT, precio ETH = 3000
+    const startPrice = 3000
+    store.put('initial_eth_balance', 1)
+    store.put('initial_usdt_balance', 10000)
+    store.put('eth_balance', 1)       // sin trades, balances = initial
+    store.put('usdt_balance', 10000)
+
+    const { getRealProfits, getInitialEquity } = require('../services/state.js')
+    const realProfits = parseFloat(getRealProfits(startPrice))
+    const initialEquity = getInitialEquity(startPrice)
+    const totalProfitsPercent = initialEquity > 0
+        ? parseFloat((100 * realProfits / initialEquity).toFixed(3))
+        : 0
+
+    // El bug original: dividía realProfits / 10000 (solo USDT), dando +630% falso
+    // Con el fix: realProfits = 0, totalProfitsPercent = 0%
+    assert.equal(realProfits, 0, `Expected 0 profit without trades, got ${realProfits}`)
+    assert.equal(totalProfitsPercent, 0, `Expected 0% profit, got ${totalProfitsPercent}%`)
+
+    // Verifica que initialEquity incluye AMBOS assets
+    const expectedEquity = 1 * startPrice + 10000 // = 13000
+    assert.equal(initialEquity, expectedEquity,
+        `initialEquity should be ${expectedEquity} (1 ETH * ${startPrice} + 10000 USDT), got ${initialEquity}`)
+  })
+
+  await runTest('G - si BTC cambia de precio pero no hay trades, profit sigue siendo 0', async () => {
+    resetStoreState(store)
+    store.put('initial_eth_balance', 1)
+    store.put('initial_usdt_balance', 10000)
+    store.put('eth_balance', 1)
+    store.put('usdt_balance', 10000)
+
+    const { getRealProfits, getInitialEquity } = require('../services/state.js')
+
+    // Precio sube 50%: 3000 -> 4500
+    const newPrice = 4500
+    const realProfits = parseFloat(getRealProfits(newPrice))
+    const initialEquity = getInitialEquity(newPrice)
+    const totalProfitsPercent = initialEquity > 0
+        ? parseFloat((100 * realProfits / initialEquity).toFixed(3))
+        : 0
+
+    // Invariante: sin trades, PnL = 0 sin importar cambio de precio
+    assert.equal(realProfits, 0, `Price change without trades should give 0 profit, got ${realProfits}`)
+    assert.equal(totalProfitsPercent, 0, `Price change without trades should give 0%, got ${totalProfitsPercent}%`)
+  })
+
+  await runTest('H - getInitialEquity refleja equity completa, no solo USDT', async () => {
+    resetStoreState(store)
+    store.put('initial_eth_balance', 2.5)
+    store.put('initial_usdt_balance', 5000)
+
+    const { getInitialEquity } = require('../services/state.js')
+
+    const price = 2000
+    const equity = getInitialEquity(price)
+
+    // 2.5 * 2000 + 5000 = 10000
+    assert.equal(equity, 10000, `Expected 10000 (2.5 ETH * 2000 + 5000 USDT), got ${equity}`)
+
+    // Verifica que NO es solo el USDT (el bug original)
+    assert.notEqual(equity, 5000, 'getInitialEquity must NOT return only USDT balance')
+  })
 })().catch((err) => {
   console.error('UNHANDLED:', err)
   process.exit(1)
