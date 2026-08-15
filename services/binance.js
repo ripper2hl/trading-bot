@@ -9,7 +9,12 @@ const {
 
 function createStubClient() {
     return {
-        prices: async () => ({}),
+        prices: async (options) => {
+            if (options && options.symbol) {
+                return { [options.symbol]: '60000' }
+            }
+            return { BTCUSDT: '60000', ETHUSDT: '3000' }
+        },
         accountInfo: async () => ({ balances: [] }),
         getOrder: async () => ({
             status: 'FILLED',

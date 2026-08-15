@@ -81,6 +81,32 @@ function getInitialEquity(price) {
     return initialBalance1 * price + initialBalance2
 }
 
+function getCurrentEquity(price) {
+    const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
+    const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
+    return (m1Balance * price) + m2Balance
+}
+
+function updatePeakEquity(price) {
+    const currentEquity = getCurrentEquity(price)
+    const initialEquity = getInitialEquity(price)
+    const storedPeak = parseFloat(store.get('peak_equity'))
+
+    let peak = (!isNaN(storedPeak) && storedPeak > 0)
+        ? Math.max(storedPeak, currentEquity)
+        : Math.max(initialEquity, currentEquity)
+
+    store.put('peak_equity', peak)
+    return peak
+}
+
+function getDrawdownFromPeak(price) {
+    const currentEquity = getCurrentEquity(price)
+    const peakEquity = updatePeakEquity(price)
+    if (peakEquity <= 0) return 0
+    return ((currentEquity - peakEquity) / peakEquity) * 100
+}
+
 function _logProfits(price) {
     const profits = parseFloat(store.get('profits'))
     var isGainerProfit = profits > 0 ? 1 : profits < 0 ? 2 : 0
@@ -90,15 +116,17 @@ function _logProfits(price) {
             colors.red : colors.gray,
         `Grid Profits (Incl. fees): ${parseFloat(store.get('profits')).toFixed(4)} ${MARKET2}`)
 
-    const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`))
-    const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`))
-    const currentEquity = m1Balance * price + m2Balance
+    const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
+    const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
+    const currentEquity = getCurrentEquity(price)
+    const peakEquity = updatePeakEquity(price)
     const initialEquity = getInitialEquity(price)
+    const ddFromPeak = getDrawdownFromPeak(price)
 
     logColor(colors.gray,
         `Balance: ${m1Balance} ${MARKET1}, ${m2Balance.toFixed(2)} ${MARKET2}`)
     logColor(colors.gray,
-        `Current: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2}`)
+        `Current: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Peak: ${parseFloat(peakEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2} (Drawdown: ${ddFromPeak.toFixed(2)}%)`)
 }
 
 async function reconcileBalances(getBalances, tolerancePercent = 1) {
@@ -156,6 +184,9 @@ module.exports = {
     _calculateProfits,
     getRealProfits,
     getInitialEquity,
+    getCurrentEquity,
+    updatePeakEquity,
+    getDrawdownFromPeak,
     _logProfits,
     reconcileBalances,
     _closeBot,

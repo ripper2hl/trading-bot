@@ -207,6 +207,29 @@ const getPrice = async (symbol) => {
     }
 }
 
+const getPriceTick = async (symbol) => {
+    if (!symbol || typeof symbol !== 'string' || !/^[A-Za-z0-9\-._]+$/.test(symbol)) {
+        return null
+    }
+
+    try {
+        const startTime = Date.now()
+        const prices = await withBackoff(() => client.prices({ symbol }))
+        const fetchLatency = Date.now() - startTime
+        if (prices && prices[symbol]) {
+            return {
+                price: parseFloat(prices[symbol]),
+                timestamp: Date.now(),
+                latency: fetchLatency
+            }
+        }
+        return null
+    } catch (err) {
+        logColor(colors.red, `[ERROR getPriceTick] ${err.message || err}`)
+        return null
+    }
+}
+
 const getQuantity = async (amount) => {
     const { symbols } = await client.exchangeInfo({ symbol: MARKET })
     const { stepSize } = symbols[0].filters.find(filter => filter.filterType === 'LOT_SIZE')
@@ -317,11 +340,11 @@ module.exports = {
     marketSell,
     getBalances,
     getPrice,
+    getPriceTick,
     getQuantity,
     getMinBuy,
     getFees,
-    withdraw,
     clearStart,
     _sellAll,
-    logFail,
+    withdraw
 }

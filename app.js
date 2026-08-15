@@ -19,10 +19,11 @@ const { log, logColor, colors } = require('./utils/logger')
 const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
-    store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity, _logProfits, _closeBot, reconcileBalances
+    store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity,
+    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, _logProfits, _closeBot, reconcileBalances
 } = require('./services/state')
 const {
-    getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw
+    getBalances, getPrice, getPriceTick, getMinBuy, clearStart, _sellAll, withdraw
 } = require('./services/exchange')
 const { getPendingIntents, updateIntent, reconstructStoreFromSQLite, db } = require('./services/ledger')
 const { acquirePidLock } = require('./services/pidLock')
@@ -90,27 +91,41 @@ async function broadcast() {
                 process.exit(1)
             }
 
-            const mPrice = await getPrice(MARKET)
-            if (mPrice) {
-                const startPrice = store.get('start_price')
-                const marketPrice = mPrice
+            const tick = await getPriceTick(MARKET)
+            if (!tick || !tick.price) {
+                logColor(colors.yellow, '[WARN] No se pudo obtener el precio del mercado. Omitiendo ciclo.')
+                await sleep(POLL_INTERVAL_MS)
+                continue
+            }
 
-                console.clear()
-                if (DRY_RUN) logColor(colors.yellow, '>>> MODO DRY-RUN ACTIVO (sin ordenes reales) <<<')
-                log(`Running Time: ${elapsedTime()}`)
-                log('===========================================================')
-                const totalProfits = getRealProfits(marketPrice)
+            // Circuit Breaker de Precio Viejo (Stale Price)
+            if (Date.now() - tick.timestamp > 3000 || tick.latency > 3000) {
+                logColor(colors.yellow, `[STALE PRICE] Precio desactualizado detectado (retraso: ${Date.now() - tick.timestamp}ms, latencia: ${tick.latency}ms). Omitiendo ciclo.`)
+                await sleep(POLL_INTERVAL_MS)
+                continue
+            }
 
-                const initialEquity = getInitialEquity(marketPrice)
-                if (initialEquity > 0 && !isNaN(totalProfits)) {
-                    const drawdownPercent = parseFloat((-100 * totalProfits / initialEquity).toFixed(3))
-                    if (drawdownPercent >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
-                        setDrawdownKilled(true)
-                        logColor(colors.red, `[KILL-SWITCH] Drawdown de ${drawdownPercent}% supera el limite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
-                        logColor(colors.red, '[KILL-SWITCH] Se requiere intervencion manual para reanudar.')
-                        _notifyTelegram(marketPrice, 'sell')
-                    }
-                }
+            const marketPrice = tick.price
+            const startPrice = store.get('start_price')
+
+            console.clear()
+            if (DRY_RUN) logColor(colors.yellow, '>>> MODO DRY-RUN ACTIVO (sin ordenes reales) <<<')
+            log(`Running Time: ${elapsedTime()}`)
+            log('===========================================================')
+            const totalProfits = getRealProfits(marketPrice)
+
+            const currentEquity = getCurrentEquity(marketPrice)
+            const peakEquity = updatePeakEquity(marketPrice)
+            const ddFromPeakPercent = getDrawdownFromPeak(marketPrice)
+            const absDrawdown = Math.abs(ddFromPeakPercent)
+
+            if (absDrawdown >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
+                setDrawdownKilled(true)
+                logColor(colors.red, `[KILL-SWITCH] Peak Equity: ${peakEquity.toFixed(2)} ${MARKET2}, Equity Actual: ${currentEquity.toFixed(2)} ${MARKET2}`)
+                logColor(colors.red, `[KILL-SWITCH] Drawdown del ${absDrawdown.toFixed(3)}% desde el máximo de equity supera el límite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
+                logColor(colors.red, '[KILL-SWITCH] Se requiere intervención manual para reanudar.')
+                _notifyTelegram(marketPrice, 'sell')
+            }
 
                 if (!isNaN(totalProfits)) {
                     const initialEquityForProfits = getInitialEquity(marketPrice)
@@ -223,7 +238,6 @@ async function broadcast() {
 
                     console.log('==========================')
                 }
-            }
         } catch (err) {
             logColor(colors.red, `[ERROR BROADCAST] Error en el ciclo del bot: ${err.message || err}`)
             try {
