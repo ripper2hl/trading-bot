@@ -373,11 +373,24 @@ async function init() {
         store.put('entry_price', price)
         store.put(`${MARKET1.toLowerCase()}_balance`, balances[MARKET1])
         store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
-        store.put(`initial_${MARKET1.toLowerCase()}_balance`, store.get(`${MARKET1.toLowerCase()}_balance`))
-        store.put(`initial_${MARKET2.toLowerCase()}_balance`, store.get(`${MARKET2.toLowerCase()}_balance`))
-        const baselineEquity = getInitialEquity(price)
-        store.put('strategy_baseline_equity', baselineEquity)
-        store.put('peak_equity_curve', baselineEquity)
+        if (store.get(`initial_${MARKET1.toLowerCase()}_balance`) === undefined) {
+            store.put(`initial_${MARKET1.toLowerCase()}_balance`, store.get(`${MARKET1.toLowerCase()}_balance`))
+        }
+        if (store.get(`initial_${MARKET2.toLowerCase()}_balance`) === undefined) {
+            store.put(`initial_${MARKET2.toLowerCase()}_balance`, store.get(`${MARKET2.toLowerCase()}_balance`))
+        }
+
+        const existingBaseline = store.get('strategy_baseline_equity')
+        if (existingBaseline === undefined || existingBaseline === null) {
+            const baselineEquity = getInitialEquity(price)
+            store.put('strategy_baseline_equity', baselineEquity)
+        }
+
+        const existingPeakCurve = store.get('peak_equity_curve')
+        if (existingPeakCurve === undefined || existingPeakCurve === null) {
+            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || getInitialEquity(price)
+            store.put('peak_equity_curve', baselineEquity)
+        }
     } else {
         if (SELL_ALL_ON_START) {
             logColor(colors.yellow, '[BOOTSTRAP WARN] SELL_ALL_ON_START está activado en config pero se ignorará por estar en modo RESUME.')

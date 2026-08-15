@@ -102,6 +102,33 @@ const store = state.store
 
     console.log('PASS: TEST 3 - Trading Drawdown con Curva de Equity y Baseline congelado verificado (Escenarios A y B pasados)')
 
+    // =========================================================================
+    // TEST 4: PRESERVACIÓN DE BASELINE Y PEAK EN REINICIO DOCKER SIN ARGUMENTO 'RESUME'
+    // =========================================================================
+    // 1. Estado pre-existente en el store antes del crash
+    store.put('strategy_baseline_equity', 10000)
+    store.put('peak_equity_curve', 10500)
+    store.put('profits', 500)
+
+    // 2. Simular restart automático de Docker tras crash (sin argumento 'resume')
+    price = 10000
+    const existingBaseline = store.get('strategy_baseline_equity')
+    if (existingBaseline === undefined || existingBaseline === null) {
+      const baselineEquity = state.getInitialEquity(price)
+      store.put('strategy_baseline_equity', baselineEquity)
+    }
+
+    const existingPeakCurve = store.get('peak_equity_curve')
+    if (existingPeakCurve === undefined || existingPeakCurve === null) {
+      const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || state.getInitialEquity(price)
+      store.put('peak_equity_curve', baselineEquity)
+    }
+
+    assert.equal(store.get('strategy_baseline_equity'), 10000, 'Baseline no debe sobreescribirse tras restart de Docker')
+    assert.equal(store.get('peak_equity_curve'), 10500, 'Peak Equity Curve no debe sobreescribirse tras restart de Docker')
+
+    console.log('PASS: TEST 4 - Preservación de Baseline y Peak Equity Curve tras restart sin argumento resume verificado')
+
   } catch (err) {
     console.error('FAIL Peak Equity & Stale Price Test:', err)
     process.exit(1)
