@@ -109,27 +109,33 @@ function getDrawdownFromPeak(price, providedPeak) {
     return ((currentEquity - peakEquity) / peakEquity) * 100
 }
 
-function updatePeakTradingProfit(price) {
+function getTradingEquityCurve(price) {
+    const frozenCapital = parseFloat(store.get('strategy_baseline_equity')) || (price ? getInitialEquity(price) : 0)
     const profitsStore = parseFloat(store.get('profits'))
-    const currentProfit = !isNaN(profitsStore) ? profitsStore : (parseFloat(getRealProfits(price)) || 0)
-    const storedPeak = parseFloat(store.get('peak_trading_profit'))
-    let peak = (!isNaN(storedPeak)) ? Math.max(storedPeak, currentProfit) : Math.max(0, currentProfit)
+    const currentProfit = !isNaN(profitsStore) ? profitsStore : (price ? parseFloat(getRealProfits(price)) || 0 : 0)
+    return frozenCapital + currentProfit
+}
+
+function updatePeakEquityCurve(price) {
+    const equityCurve = getTradingEquityCurve(price)
+    const storedPeak = parseFloat(store.get('peak_equity_curve'))
+    let peak = (!isNaN(storedPeak) && storedPeak > 0)
+        ? Math.max(storedPeak, equityCurve)
+        : equityCurve
 
     if (peak !== storedPeak) {
-        store.put('peak_trading_profit', peak)
+        store.put('peak_equity_curve', peak)
     }
     return peak
 }
 
 function getTradingDrawdown(price, providedPeak) {
-    const profitsStore = parseFloat(store.get('profits'))
-    const currentProfit = !isNaN(profitsStore) ? profitsStore : (parseFloat(getRealProfits(price)) || 0)
-    const peakProfit = (providedPeak !== undefined)
+    const equityCurve = getTradingEquityCurve(price)
+    const peak = (providedPeak !== undefined)
         ? providedPeak
-        : (parseFloat(store.get('peak_trading_profit')) || 0)
-    const initialEquity = getInitialEquity(price)
-    if (initialEquity <= 0) return 0
-    return ((currentProfit - peakProfit) / initialEquity) * 100
+        : (parseFloat(store.get('peak_equity_curve')) || updatePeakEquityCurve(price))
+    if (peak <= 0) return 0
+    return ((equityCurve - peak) / peak) * 100
 }
 
 function _logProfits(price) {
@@ -144,17 +150,17 @@ function _logProfits(price) {
     const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
     const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
     const currentEquity = getCurrentEquity(price)
-    const peakEquity = updatePeakEquity(price)
     const initialEquity = getInitialEquity(price)
-    const peakTrading = updatePeakTradingProfit(price)
-    const tradingDD = getTradingDrawdown(price, peakTrading)
+    const equityCurve = getTradingEquityCurve(price)
+    const peakCurve = updatePeakEquityCurve(price)
+    const tradingDD = getTradingDrawdown(price, peakCurve)
 
     logColor(colors.gray,
         `Balance: ${m1Balance} ${MARKET1}, ${m2Balance.toFixed(2)} ${MARKET2}`)
     logColor(colors.gray,
         `Current Equity: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2}`)
     logColor(colors.gray,
-        `Peak Trading Profit: ${peakTrading.toFixed(4)} ${MARKET2}, Trading Drawdown: ${tradingDD.toFixed(2)}%`)
+        `Equity Curve: ${equityCurve.toFixed(2)} ${MARKET2}, Peak Curve: ${peakCurve.toFixed(2)} ${MARKET2}, Trading Drawdown: ${tradingDD.toFixed(2)}%`)
 }
 
 async function reconcileBalances(getBalances, tolerancePercent = 1) {
@@ -215,7 +221,8 @@ module.exports = {
     getCurrentEquity,
     updatePeakEquity,
     getDrawdownFromPeak,
-    updatePeakTradingProfit,
+    getTradingEquityCurve,
+    updatePeakEquityCurve,
     getTradingDrawdown,
     _logProfits,
     reconcileBalances,

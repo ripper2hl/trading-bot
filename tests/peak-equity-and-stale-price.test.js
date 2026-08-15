@@ -73,25 +73,34 @@ const store = state.store
     console.log('PASS: TEST 2 - Circuit Breaker de Alta Latencia verificado')
 
     // =========================================================================
-    // TEST 3: CÁLCULO DE TRADING DRAWDOWN (SOLO PnL DE OPERACIONES DEL BOT)
+    // TEST 3: CÁLCULO DE TRADING DRAWDOWN CON BASELINE CONGELADO (EQUITY CURVE)
     // =========================================================================
     store.put('initial_btc_balance', 0)
     store.put('initial_usdt_balance', 10000)
     store.put('btc_balance', 0)
     store.put('usdt_balance', 10000)
-    store.put('profits', 500) // Profit de trading acumulado = +500 USDT (+5% de $10,000)
-    store.put('peak_trading_profit', 0)
+    store.put('strategy_baseline_equity', 10000)
+    store.put('peak_equity_curve', 0)
+    store.put('profits', 0)
 
-    let peakTrading = state.updatePeakTradingProfit(10000)
-    assert.equal(peakTrading, 500, 'Peak Trading Profit debe actualizarse a $500')
+    // Escenario A: Profit chico ($2.00) y pequeña fluctuación a $1.80 no debe causar un falso drawdown del -10%
+    store.put('profits', 2.00)
+    let peakCurve = state.updatePeakEquityCurve(10000)
+    assert.equal(peakCurve, 10002.00, 'Peak Equity Curve debe ser $10,002.00')
 
-    // Si el bot sufre una pérdida en operaciones y profit cae a $100 USDT (+1%)
-    // Trading Drawdown = (100 - 500) / 10000 * 100 = -4%
-    store.put('profits', 100)
-    let tradingDD = state.getTradingDrawdown(10000, peakTrading)
-    assert.equal(tradingDD, -4, 'Trading Drawdown desde el máximo de ganancias debe ser -4%')
+    store.put('profits', 1.80)
+    let tradingDD_SmallNoise = state.getTradingDrawdown(10000, peakCurve)
+    assert.ok(tradingDD_SmallNoise > -0.1, `Ruido chico de $2.00 -> $1.80 no debe dar -10% (obtenido: ${tradingDD_SmallNoise.toFixed(4)}%)`)
 
-    console.log('PASS: TEST 3 - Trading Drawdown desde el máximo de ganancias verificado')
+    // Escenario B: Pérdidas desde el trade #1 antes de tener cualquier ganancia (profits = -$500 en baseline $10,000)
+    store.put('strategy_baseline_equity', 10000)
+    store.put('peak_equity_curve', 10000)
+    store.put('profits', -500)
+
+    let tradingDD_Trade1Loss = state.getTradingDrawdown(10000)
+    assert.equal(tradingDD_Trade1Loss, -5.0, 'Pérdidas desde el trade #1 deben dar -5% drawdown de inmediato')
+
+    console.log('PASS: TEST 3 - Trading Drawdown con Curva de Equity y Baseline congelado verificado (Escenarios A y B pasados)')
 
   } catch (err) {
     console.error('FAIL Peak Equity & Stale Price Test:', err)

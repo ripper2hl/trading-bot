@@ -20,7 +20,7 @@ const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
     store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity,
-    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, updatePeakTradingProfit, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances
+    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances
 } = require('./services/state')
 const {
     getBalances, getPrice, getPriceTick, getMinBuy, clearStart, _sellAll, withdraw
@@ -115,14 +115,15 @@ async function broadcast() {
             const totalProfits = getRealProfits(marketPrice)
 
             const currentEquity = getCurrentEquity(marketPrice)
-            const peakTradingProfit = updatePeakTradingProfit(marketPrice)
-            const tradingDDPercent = getTradingDrawdown(marketPrice, peakTradingProfit)
+            const equityCurve = getTradingEquityCurve(marketPrice)
+            const peakEquityCurve = updatePeakEquityCurve(marketPrice)
+            const tradingDDPercent = getTradingDrawdown(marketPrice, peakEquityCurve)
             const absTradingDrawdown = Math.abs(tradingDDPercent)
 
             if (absTradingDrawdown >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
                 setDrawdownKilled(true)
-                logColor(colors.red, `[KILL-SWITCH] Peak Trading Profit: ${peakTradingProfit.toFixed(4)} ${MARKET2}, Equity Actual: ${currentEquity.toFixed(2)} ${MARKET2}`)
-                logColor(colors.red, `[KILL-SWITCH] Trading Drawdown de ${absTradingDrawdown.toFixed(3)}% desde el máximo de ganancias de trading supera el límite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
+                logColor(colors.red, `[KILL-SWITCH] Peak Equity Curve: ${peakEquityCurve.toFixed(2)} ${MARKET2}, Equity Curve Actual: ${equityCurve.toFixed(2)} ${MARKET2}`)
+                logColor(colors.red, `[KILL-SWITCH] Trading Drawdown del ${absTradingDrawdown.toFixed(3)}% desde el máximo de la curva de equity supera el límite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
                 logColor(colors.red, '[KILL-SWITCH] Se requiere intervención manual para reanudar.')
                 _notifyTelegram(marketPrice, 'sell')
             }
@@ -374,6 +375,9 @@ async function init() {
         store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
         store.put(`initial_${MARKET1.toLowerCase()}_balance`, store.get(`${MARKET1.toLowerCase()}_balance`))
         store.put(`initial_${MARKET2.toLowerCase()}_balance`, store.get(`${MARKET2.toLowerCase()}_balance`))
+        const baselineEquity = getInitialEquity(price)
+        store.put('strategy_baseline_equity', baselineEquity)
+        store.put('peak_equity_curve', baselineEquity)
     } else {
         if (SELL_ALL_ON_START) {
             logColor(colors.yellow, '[BOOTSTRAP WARN] SELL_ALL_ON_START está activado en config pero se ignorará por estar en modo RESUME.')
