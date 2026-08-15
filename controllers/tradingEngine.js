@@ -11,6 +11,7 @@ const {
 const { log, logColor, colors } = require('../utils/logger')
 const { store, _newPriceReset, _calculateProfits } = require('../services/state')
 const { marketBuy, marketSell, getBalances, getPrice, getQuantity, getFees } = require('../services/exchange')
+const { updateIntent } = require('../services/ledger')
 
 // Estado mutable del kill-switch (persistido en store para sobrevivir reinicios)
 let drawdownKilled = Boolean(store.get('drawdown_killed'))
@@ -256,9 +257,14 @@ async function _sell(price, updateBalancesFn, notifyFn) {
                 _calculateProfits()
 
                 var i = orders.length
-                while (i--)
-                    if (orders[i].status === 'sold')
+                while (i--) {
+                    if (orders[i].status === 'sold') {
+                        if (orders[i].id) {
+                            updateIntent(orders[i].id, 'CLOSED')
+                        }
                         orders.splice(i, 1)
+                    }
+                }
 
                 store.put('orders', orders)
 

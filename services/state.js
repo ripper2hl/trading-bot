@@ -6,7 +6,11 @@
 const Storage = require('node-storage')
 const moment = require('moment')
 const fs = require('fs')
-const { MARKET1, MARKET2, MARKET } = require('../config/constants')
+const {
+    MARKET1, MARKET2, MARKET,
+    BALANCE_ABSOLUTE_TOLERANCE_BASE,
+    BALANCE_ABSOLUTE_TOLERANCE_QUOTE
+} = require('../config/constants')
 const { log, logColor, colors } = require('../utils/logger')
 
 const store = new Storage(`./data/${MARKET}.json`)
@@ -109,15 +113,15 @@ async function reconcileBalances(getBalances, tolerancePercent = 1) {
 
     const baseMismatch = localBase > 0
         ? (absBaseDiff / localBase) * 100
-        : (realBase > 0 && absBaseDiff > 0.0001 ? 100 : 0)
+        : (realBase > 0 && absBaseDiff > BALANCE_ABSOLUTE_TOLERANCE_BASE ? 100 : 0)
 
     const quoteMismatch = localQuote > 0
         ? (absQuoteDiff / localQuote) * 100
-        : (realQuote > 0 && absQuoteDiff > 0.1 ? 100 : 0)
+        : (realQuote > 0 && absQuoteDiff > BALANCE_ABSOLUTE_TOLERANCE_QUOTE ? 100 : 0)
 
     const maxMismatch = Math.max(baseMismatch, quoteMismatch)
 
-    if (maxMismatch > tolerancePercent || (localBase === 0 && realBase > 0.0001) || (localQuote === 0 && realQuote > 0.1)) {
+    if (maxMismatch > tolerancePercent || (localBase === 0 && realBase > BALANCE_ABSOLUTE_TOLERANCE_BASE) || (localQuote === 0 && realQuote > BALANCE_ABSOLUTE_TOLERANCE_QUOTE)) {
         const errorMessage = `[STATE MISMATCH] Desincronización grave detectada: ${MARKET1} local=${localBase}, real=${realBase}, drift=${baseMismatch.toFixed(2)}%; ${MARKET2} local=${localQuote}, real=${realQuote}, drift=${quoteMismatch.toFixed(2)}%; umbral=${tolerancePercent}%.`
         logColor(colors.red, errorMessage)
         throw new Error(errorMessage)

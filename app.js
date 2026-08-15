@@ -11,6 +11,7 @@ const {
     SELL_ALL_ON_CLOSE, SELL_ALL_ON_START, START_AGAIN,
     WITHDRAW_PROFITS_ENABLED, MIN_WITHDRAW_AMOUNT,
     GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO,
+    BALANCE_ABSOLUTE_TOLERANCE_BASE,
     validateBootstrapConfig
 } = require('./config/constants')
 const client = require('./services/binance')
@@ -23,7 +24,8 @@ const {
 const {
     getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw
 } = require('./services/exchange')
-const { getPendingIntents, updateIntent, db } = require('./services/ledger')
+const { getPendingIntents, updateIntent, reconstructStoreFromSQLite, db } = require('./services/ledger')
+const { acquirePidLock } = require('./services/pidLock')
 const {
     _buy, _sell, getToSold, setDrawdownKilled, isDrawdownKilled
 } = require('./controllers/tradingEngine')
@@ -273,6 +275,8 @@ async function init() {
         process.exit(1)
     }
 
+    acquirePidLock(MARKET)
+
     if (isDrawdownKilled()) {
         logColor(colors.red, '[BOOTSTRAP] Kill-switch restaurado desde el store: operaciones bloqueadas por drawdown previo.')
     }
@@ -303,7 +307,17 @@ async function init() {
                 )
 
                 if (isOrderMissing) {
-                    console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} no existe en Binance. Marcando como FAILED y continuando.`)
+                    const balances = await getBalances()
+                    const localBase = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
+                    const realBase = parseFloat(balances[MARKET1]) || 0
+
+                    if (intent.side === 'BUY' && (realBase - localBase) > BALANCE_ABSOLUTE_TOLERANCE_BASE) {
+                        console.error(`[QUARANTINE] Intent ${intent.clientOrderId} retornó NOT_FOUND pero el saldo en Binance (${realBase} ${MARKET1}) supera al local (${localBase}). Cuarentena activada para evitar sobre-compras.`)
+                        await emergencyCleanUp()
+                        process.exit(1)
+                    }
+
+                    console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} no existe en Binance y balances coinciden. Marcando como FAILED.`)
                     updateIntent(intent.clientOrderId, 'FAILED')
                     continue
                 }
@@ -345,6 +359,19 @@ async function init() {
         store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
         store.put(`initial_${MARKET1.toLowerCase()}_balance`, store.get(`${MARKET1.toLowerCase()}_balance`))
         store.put(`initial_${MARKET2.toLowerCase()}_balance`, store.get(`${MARKET2.toLowerCase()}_balance`))
+    } else {
+        if (SELL_ALL_ON_START) {
+            logColor(colors.yellow, '[BOOTSTRAP WARN] SELL_ALL_ON_START está activado en config pero se ignorará por estar en modo RESUME.')
+        }
+
+        // Reconstruccion de vista cache (store JSON) si fue borrada o esta vacia
+        const currentOrders = store.get('orders')
+        if (!Array.isArray(currentOrders) || currentOrders.length === 0) {
+            const currentPrice = await getPrice(MARKET)
+            const balances = await getBalances()
+            logColor(colors.yellow, '[BOOTSTRAP] Reconstruyendo vista de estado local a partir del Ledger SQLite...')
+            reconstructStoreFromSQLite({ symbol: MARKET, store, currentPrice, balances })
+        }
     }
 
     broadcast()

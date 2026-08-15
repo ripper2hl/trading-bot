@@ -128,6 +128,10 @@ const DEFAULT_WITHDRAW_NETWORK = process.env.DEFAULT_WITHDRAW_NETWORK || ''
 const WITHDRAW_ADDRESS_BUSD = process.env.WITHDRAW_ADDRESS_BUSD || ''
 const WITHDRAW_ADDRESS_USDT = process.env.WITHDRAW_ADDRESS_USDT || ''
 
+// ─── TOLERANCIAS DE RECONCILIACION ──────────────────────────────
+const BALANCE_ABSOLUTE_TOLERANCE_BASE = ensureValidNumeric(process.env.BALANCE_ABSOLUTE_TOLERANCE_BASE, 'BALANCE_ABSOLUTE_TOLERANCE_BASE', 0.0001)
+const BALANCE_ABSOLUTE_TOLERANCE_QUOTE = ensureValidNumeric(process.env.BALANCE_ABSOLUTE_TOLERANCE_QUOTE, 'BALANCE_ABSOLUTE_TOLERANCE_QUOTE', 0.1)
+
 // ─── ENTORNO ────────────────────────────────────────────────────
 const USE_TESTNET = process.env.USE_TESTNET === 'true' || process.env.USE_TESTNET === '1'
 const TEST_MODE = process.env.TEST_MODE === 'true' || process.env.TEST_MODE === '1' || process.env.NODE_ENV === 'test'
@@ -175,6 +179,9 @@ module.exports = {
     // Entorno
     USE_TESTNET,
     TEST_MODE,
+    // Tolerancias de reconciliación
+    BALANCE_ABSOLUTE_TOLERANCE_BASE,
+    BALANCE_ABSOLUTE_TOLERANCE_QUOTE,
     // Funciones
     validateBootstrapConfig,
 }
