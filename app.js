@@ -20,7 +20,7 @@ const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
     store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity,
-    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, _logProfits, _closeBot, reconcileBalances
+    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, updatePeakTradingProfit, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances
 } = require('./services/state')
 const {
     getBalances, getPrice, getPriceTick, getMinBuy, clearStart, _sellAll, withdraw
@@ -115,14 +115,14 @@ async function broadcast() {
             const totalProfits = getRealProfits(marketPrice)
 
             const currentEquity = getCurrentEquity(marketPrice)
-            const peakEquity = updatePeakEquity(marketPrice)
-            const ddFromPeakPercent = getDrawdownFromPeak(marketPrice, peakEquity)
-            const absDrawdown = Math.abs(ddFromPeakPercent)
+            const peakTradingProfit = updatePeakTradingProfit(marketPrice)
+            const tradingDDPercent = getTradingDrawdown(marketPrice, peakTradingProfit)
+            const absTradingDrawdown = Math.abs(tradingDDPercent)
 
-            if (absDrawdown >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
+            if (absTradingDrawdown >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
                 setDrawdownKilled(true)
-                logColor(colors.red, `[KILL-SWITCH] Peak Equity: ${peakEquity.toFixed(2)} ${MARKET2}, Equity Actual: ${currentEquity.toFixed(2)} ${MARKET2}`)
-                logColor(colors.red, `[KILL-SWITCH] Drawdown del ${absDrawdown.toFixed(3)}% desde el máximo de equity supera el límite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
+                logColor(colors.red, `[KILL-SWITCH] Peak Trading Profit: ${peakTradingProfit.toFixed(4)} ${MARKET2}, Equity Actual: ${currentEquity.toFixed(2)} ${MARKET2}`)
+                logColor(colors.red, `[KILL-SWITCH] Trading Drawdown de ${absTradingDrawdown.toFixed(3)}% desde el máximo de ganancias de trading supera el límite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
                 logColor(colors.red, '[KILL-SWITCH] Se requiere intervención manual para reanudar.')
                 _notifyTelegram(marketPrice, 'sell')
             }
@@ -259,7 +259,7 @@ async function recoverPendingIntent(intent, { store, getBalances }) {
     if (MARKET2) store.put(`${MARKET2.toLowerCase()}_balance`, balances[MARKET2])
 
     if (intent && intent.clientOrderId) {
-        updateIntent(intent.clientOrderId, 'CONFIRMED')
+        updateIntent(intent.clientOrderId, 'CONFIRMED', intent.price, intent.fee)
     }
 
     if (intent && intent.side === 'BUY') {
@@ -303,9 +303,10 @@ async function init() {
                 const order = await client.getOrder({ symbol: MARKET, origClientOrderId: intent.clientOrderId })
                 if (order && (order.status === 'FILLED' || order.status === 'PARTIALLY_FILLED')) {
                     console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} confirmado en Binance. Reconciliando estado local.`)
-                    updateIntent(intent.clientOrderId, 'CONFIRMED')
-                    const price = parseFloat(order.fills?.[0]?.price || 0)
-                    intent.price = price
+                    const fillPrice = parseFloat(order.fills?.[0]?.price || order.price || 0)
+                    const fillFee = parseFloat(order.fills?.[0]?.commission || 0)
+                    updateIntent(intent.clientOrderId, 'CONFIRMED', fillPrice, fillFee)
+                    intent.price = fillPrice
                     await recoverPendingIntent(intent, { store, getBalances })
                     logColor(colors.yellow, `[BOOTSTRAP] Crash recuperado. Orden ${intent.clientOrderId} ejecutada offline.`)
                 } else {

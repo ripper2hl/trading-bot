@@ -85,7 +85,7 @@ async function marketOrder(side, amount, quoted) {
 
         logTrade(`DRY_RUN_${side}`, { symbol: MARKET, quantity: simQty, price: simPrice, orderId: simResult.orderId, fee: simCommission })
         logColor(colors.yellow, `[DRY-RUN] Orden ${side} simulada: ${simQty.toFixed(6)} ${MARKET1} @ ${simPrice} ${MARKET2} (fee: ${simCommission.toFixed(6)} ${commissionAsset})`)
-        updateIntent(orderObject.newClientOrderId, 'CONFIRMED')
+        updateIntent(orderObject.newClientOrderId, 'CONFIRMED', simPrice, simCommission)
         return simResult
     }
 
@@ -132,7 +132,9 @@ async function marketOrder(side, amount, quoted) {
         }
 
         if (res && res.status === 'FILLED') {
-            updateIntent(orderObject.newClientOrderId, 'CONFIRMED')
+            const executedPrice = res.fills && res.fills.length > 0 ? parseFloat(res.fills[0].price) : null
+            const executedFee = res.fills && res.fills.length > 0 ? parseFloat(res.fills[0].commission) : null
+            updateIntent(orderObject.newClientOrderId, 'CONFIRMED', executedPrice, executedFee)
             logTrade(side, {
                 symbol: MARKET,
                 quantity: res.executedQty,

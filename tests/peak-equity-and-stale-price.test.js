@@ -72,6 +72,27 @@ const store = state.store
 
     console.log('PASS: TEST 2 - Circuit Breaker de Alta Latencia verificado')
 
+    // =========================================================================
+    // TEST 3: CÁLCULO DE TRADING DRAWDOWN (SOLO PnL DE OPERACIONES DEL BOT)
+    // =========================================================================
+    store.put('initial_btc_balance', 0)
+    store.put('initial_usdt_balance', 10000)
+    store.put('btc_balance', 0)
+    store.put('usdt_balance', 10000)
+    store.put('profits', 500) // Profit de trading acumulado = +500 USDT (+5% de $10,000)
+    store.put('peak_trading_profit', 0)
+
+    let peakTrading = state.updatePeakTradingProfit(10000)
+    assert.equal(peakTrading, 500, 'Peak Trading Profit debe actualizarse a $500')
+
+    // Si el bot sufre una pérdida en operaciones y profit cae a $100 USDT (+1%)
+    // Trading Drawdown = (100 - 500) / 10000 * 100 = -4%
+    store.put('profits', 100)
+    let tradingDD = state.getTradingDrawdown(10000, peakTrading)
+    assert.equal(tradingDD, -4, 'Trading Drawdown desde el máximo de ganancias debe ser -4%')
+
+    console.log('PASS: TEST 3 - Trading Drawdown desde el máximo de ganancias verificado')
+
   } catch (err) {
     console.error('FAIL Peak Equity & Stale Price Test:', err)
     process.exit(1)

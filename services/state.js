@@ -109,6 +109,29 @@ function getDrawdownFromPeak(price, providedPeak) {
     return ((currentEquity - peakEquity) / peakEquity) * 100
 }
 
+function updatePeakTradingProfit(price) {
+    const profitsStore = parseFloat(store.get('profits'))
+    const currentProfit = !isNaN(profitsStore) ? profitsStore : (parseFloat(getRealProfits(price)) || 0)
+    const storedPeak = parseFloat(store.get('peak_trading_profit'))
+    let peak = (!isNaN(storedPeak)) ? Math.max(storedPeak, currentProfit) : Math.max(0, currentProfit)
+
+    if (peak !== storedPeak) {
+        store.put('peak_trading_profit', peak)
+    }
+    return peak
+}
+
+function getTradingDrawdown(price, providedPeak) {
+    const profitsStore = parseFloat(store.get('profits'))
+    const currentProfit = !isNaN(profitsStore) ? profitsStore : (parseFloat(getRealProfits(price)) || 0)
+    const peakProfit = (providedPeak !== undefined)
+        ? providedPeak
+        : (parseFloat(store.get('peak_trading_profit')) || 0)
+    const initialEquity = getInitialEquity(price)
+    if (initialEquity <= 0) return 0
+    return ((currentProfit - peakProfit) / initialEquity) * 100
+}
+
 function _logProfits(price) {
     const profits = parseFloat(store.get('profits'))
     var isGainerProfit = profits > 0 ? 1 : profits < 0 ? 2 : 0
@@ -123,12 +146,15 @@ function _logProfits(price) {
     const currentEquity = getCurrentEquity(price)
     const peakEquity = updatePeakEquity(price)
     const initialEquity = getInitialEquity(price)
-    const ddFromPeak = getDrawdownFromPeak(price, peakEquity)
+    const peakTrading = updatePeakTradingProfit(price)
+    const tradingDD = getTradingDrawdown(price, peakTrading)
 
     logColor(colors.gray,
         `Balance: ${m1Balance} ${MARKET1}, ${m2Balance.toFixed(2)} ${MARKET2}`)
     logColor(colors.gray,
-        `Current: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Peak: ${parseFloat(peakEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2} (Drawdown: ${ddFromPeak.toFixed(2)}%)`)
+        `Current Equity: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2}`)
+    logColor(colors.gray,
+        `Peak Trading Profit: ${peakTrading.toFixed(4)} ${MARKET2}, Trading Drawdown: ${tradingDD.toFixed(2)}%`)
 }
 
 async function reconcileBalances(getBalances, tolerancePercent = 1) {
@@ -189,6 +215,8 @@ module.exports = {
     getCurrentEquity,
     updatePeakEquity,
     getDrawdownFromPeak,
+    updatePeakTradingProfit,
+    getTradingDrawdown,
     _logProfits,
     reconcileBalances,
     _closeBot,
