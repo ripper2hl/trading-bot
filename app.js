@@ -98,9 +98,9 @@ async function broadcast() {
                 continue
             }
 
-            // Circuit Breaker de Precio Viejo (Stale Price)
-            if (Date.now() - tick.timestamp > 3000 || tick.latency > 3000) {
-                logColor(colors.yellow, `[STALE PRICE] Precio desactualizado detectado (retraso: ${Date.now() - tick.timestamp}ms, latencia: ${tick.latency}ms). Omitiendo ciclo.`)
+            // Circuit Breaker de Alta Latencia (High Latency)
+            if (tick.latency > 3000) {
+                logColor(colors.yellow, `[HIGH LATENCY] Latencia de red excesiva con Binance (${tick.latency}ms > 3000ms). Omitiendo ciclo.`)
                 await sleep(POLL_INTERVAL_MS)
                 continue
             }
@@ -116,7 +116,7 @@ async function broadcast() {
 
             const currentEquity = getCurrentEquity(marketPrice)
             const peakEquity = updatePeakEquity(marketPrice)
-            const ddFromPeakPercent = getDrawdownFromPeak(marketPrice)
+            const ddFromPeakPercent = getDrawdownFromPeak(marketPrice, peakEquity)
             const absDrawdown = Math.abs(ddFromPeakPercent)
 
             if (absDrawdown >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {

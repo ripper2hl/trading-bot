@@ -96,13 +96,15 @@ function updatePeakEquity(price) {
         ? Math.max(storedPeak, currentEquity)
         : Math.max(initialEquity, currentEquity)
 
-    store.put('peak_equity', peak)
+    if (peak !== storedPeak) {
+        store.put('peak_equity', peak)
+    }
     return peak
 }
 
-function getDrawdownFromPeak(price) {
+function getDrawdownFromPeak(price, providedPeak) {
     const currentEquity = getCurrentEquity(price)
-    const peakEquity = updatePeakEquity(price)
+    const peakEquity = providedPeak || parseFloat(store.get('peak_equity')) || getInitialEquity(price)
     if (peakEquity <= 0) return 0
     return ((currentEquity - peakEquity) / peakEquity) * 100
 }
@@ -121,7 +123,7 @@ function _logProfits(price) {
     const currentEquity = getCurrentEquity(price)
     const peakEquity = updatePeakEquity(price)
     const initialEquity = getInitialEquity(price)
-    const ddFromPeak = getDrawdownFromPeak(price)
+    const ddFromPeak = getDrawdownFromPeak(price, peakEquity)
 
     logColor(colors.gray,
         `Balance: ${m1Balance} ${MARKET1}, ${m2Balance.toFixed(2)} ${MARKET2}`)

@@ -52,7 +52,7 @@ const store = state.store
     price = 30000 // Equity = 0.66666667 * 30000 + 10000 = 30000
     currentEquity = state.getCurrentEquity(price)
     peakEquity = state.updatePeakEquity(price)
-    ddPercent = state.getDrawdownFromPeak(price)
+    ddPercent = state.getDrawdownFromPeak(price, peakEquity)
 
     assert.equal(peakEquity, 40000, 'Peak equity debe mantenerse en $40,000')
     assert.equal(Math.round(currentEquity), 30000, 'Current equity debe ser $30,000')
@@ -61,16 +61,16 @@ const store = state.store
     console.log('PASS: TEST 1 - Peak Equity & Real Drawdown desde el máximo histórico verificado')
 
     // =========================================================================
-    // TEST 2: CIRCUIT BREAKER DE PRECIO VIEJO (STALE PRICE)
+    // TEST 2: CIRCUIT BREAKER DE ALTA LATENCIA DE RED (HIGH LATENCY)
     // =========================================================================
 
     const tick = await getPriceTick('BTCUSDT')
     assert.ok(tick, 'getPriceTick debe devolver un objeto tick')
     assert.ok(typeof tick.price === 'number', 'tick.price debe ser numérico')
-    assert.ok(typeof tick.timestamp === 'number', 'tick.timestamp debe ser numérico')
-    assert.ok(Date.now() - tick.timestamp < 3000, 'El tick reciente debe estar dentro de los 3000ms')
+    assert.ok(typeof tick.latency === 'number', 'tick.latency debe ser numérico')
+    assert.ok(tick.latency < 3000, 'La latencia de red debe ser inferior a 3000ms')
 
-    console.log('PASS: TEST 2 - Circuit Breaker de Stale Price verificado')
+    console.log('PASS: TEST 2 - Circuit Breaker de Alta Latencia verificado')
 
   } catch (err) {
     console.error('FAIL Peak Equity & Stale Price Test:', err)

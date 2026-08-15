@@ -219,7 +219,7 @@ const getPriceTick = async (symbol) => {
         if (prices && prices[symbol]) {
             return {
                 price: parseFloat(prices[symbol]),
-                timestamp: Date.now(),
+                timestamp: startTime,
                 latency: fetchLatency
             }
         }
@@ -346,5 +346,6 @@ module.exports = {
     getFees,
     clearStart,
     _sellAll,
-    withdraw
+    withdraw,
+    logFail
 }
