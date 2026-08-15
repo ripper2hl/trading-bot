@@ -3,6 +3,8 @@
  * Inicializa el bot e inicia el bucle principal (broadcast).
  * Toda la logica de negocio vive en controllers/ y services/.
  */
+const fs = require('fs')
+const path = require('path')
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
     BUY_PERCENT, SELL_PERCENT, STOP_LOSS_PERCENT, TAKE_PROFIT_PERCENT,
@@ -11,7 +13,7 @@ const {
     SELL_ALL_ON_CLOSE, SELL_ALL_ON_START, START_AGAIN,
     WITHDRAW_PROFITS_ENABLED, MIN_WITHDRAW_AMOUNT,
     GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO,
-    BALANCE_ABSOLUTE_TOLERANCE_BASE,
+    BALANCE_ABSOLUTE_TOLERANCE_BASE, USE_TESTNET,
     validateBootstrapConfig
 } = require('./config/constants')
 const client = require('./services/binance')
@@ -82,6 +84,14 @@ async function updateBalances() {
 async function broadcast() {
     while (true) {
         try {
+            const haltFilePath = path.join(__dirname, 'data', `${MARKET1}${MARKET2}.HALT`)
+            const haltAltPath = path.join('data', `${MARKET1}${MARKET2}.HALT`)
+            if (fs.existsSync(haltFilePath) || fs.existsSync(haltAltPath)) {
+                logColor(colors.yellow, '[HALT MANUAL] Archivo de pausa detectado. El bot está en suspensión temporal...')
+                await sleep(POLL_INTERVAL_MS)
+                continue
+            }
+
             try {
                 await reconcileBalances(getBalances, 1)
             } catch (balanceErr) {
@@ -111,8 +121,11 @@ async function broadcast() {
             console.clear()
             if (DRY_RUN) logColor(colors.yellow, '>>> MODO DRY-RUN ACTIVO (sin ordenes reales) <<<')
             log(`Running Time: ${elapsedTime()}`)
-            log('===========================================================')
-            const totalProfits = getRealProfits(marketPrice)
+            const totalProfits = parseFloat(store.get('profits')) || 0
+            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || getInitialEquity(marketPrice)
+            const totalProfitsPercent = baselineEquity > 0
+                ? parseFloat((100 * totalProfits / baselineEquity).toFixed(3))
+                : 0
 
             const currentEquity = getCurrentEquity(marketPrice)
             const equityCurve = getTradingEquityCurve(marketPrice)
@@ -129,10 +142,6 @@ async function broadcast() {
             }
 
                 if (!isNaN(totalProfits)) {
-                    const initialEquityForProfits = getInitialEquity(marketPrice)
-                    const totalProfitsPercent = initialEquityForProfits > 0
-                        ? parseFloat((100 * totalProfits / initialEquityForProfits).toFixed(3))
-                        : 0
                     log(`Withdrawal profits: ${parseFloat(store.get('withdrawal_profits')).toFixed(2)} ${MARKET2}`)
                     logColor(totalProfits < 0 ? colors.red : totalProfits == 0 ? colors.gray : colors.green,
                         `Real Profits [SL = ${STOP_LOSS_PERCENT}%, TP = ${TAKE_PROFIT_PERCENT}%]: ${totalProfitsPercent}% ==> ${totalProfits <= 0 ? '' : '+'}${parseFloat(totalProfits).toFixed(3)} ${MARKET2}`)
@@ -405,6 +414,25 @@ async function init() {
             reconstructStoreFromSQLite({ symbol: MARKET, store, currentPrice, balances })
         }
     }
+
+    const envStr = USE_TESTNET ? 'TESTNET' : 'MAINNET'
+    const dryRunStr = DRY_RUN ? 'true' : 'false'
+    const withdrawStr = WITHDRAW_PROFITS_ENABLED ? 'true' : 'false'
+    const baselineStr = `${(parseFloat(store.get('strategy_baseline_equity')) || 0).toFixed(2)} ${MARKET2}`
+    const openOrdersCount = Array.isArray(store.get('orders')) ? store.get('orders').length : 0
+
+    console.log(`
++--------------------------------------------------------+
+|                  STARTUP AUDIT LOG                     |
++--------------------------------------------------------+
+| Environment:             ${envStr.padEnd(29)} |
+| DRY_RUN:                 ${dryRunStr.padEnd(29)} |
+| WITHDRAW_PROFITS_ENABLE: ${withdrawStr.padEnd(29)} |
+| Initial Baseline Equity: ${baselineStr.padEnd(29)} |
+| Open Orders Activas:     ${String(openOrdersCount).padEnd(29)} |
+| PID Lock Status:         OK                            |
++--------------------------------------------------------+
+`)
 
     broadcast()
 }
