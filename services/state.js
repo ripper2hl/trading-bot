@@ -210,6 +210,23 @@ function _closeBot() {
     }
 }
 
+function resolveInitialBaseline(market2 = MARKET2) {
+    const existing = store.get('strategy_baseline_equity')
+    if (existing !== undefined && existing !== null) {
+        return parseFloat(existing)
+    }
+    const quoteKey = `initial_${market2.toLowerCase()}_balance`
+    const fallbackQuoteKey = `${market2.toLowerCase()}_balance`
+    const baseline = parseFloat(store.get(quoteKey)) || parseFloat(store.get(fallbackQuoteKey)) || 0
+    store.put('strategy_baseline_equity', baseline)
+
+    const existingPeak = store.get('peak_equity_curve')
+    if (existingPeak === undefined || existingPeak === null) {
+        store.put('peak_equity_curve', baseline)
+    }
+    return baseline
+}
+
 module.exports = {
     store,
     elapsedTime,
@@ -226,5 +243,6 @@ module.exports = {
     getTradingDrawdown,
     _logProfits,
     reconcileBalances,
+    resolveInitialBaseline,
     _closeBot,
 }

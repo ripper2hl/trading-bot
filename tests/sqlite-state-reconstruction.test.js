@@ -115,17 +115,15 @@ function resetStoreFile() {
     store.put('initial_btc_balance', preExistingBalances.BTC)
     store.put('initial_usdt_balance', preExistingBalances.USDT)
 
-    // Recalcular el baseline cuando strategy_baseline_equity no existe en el store
-    const existingBaseline = store.get('strategy_baseline_equity')
-    if (existingBaseline === undefined || existingBaseline === null) {
-      const baselineEquity = parseFloat(store.get('initial_usdt_balance')) || 0
-      store.put('strategy_baseline_equity', baselineEquity)
-    }
+    // Ejecutar la funcion REAL de produccion: resolveInitialBaseline
+    const { resolveInitialBaseline } = state
+    const resolvedBaseline = resolveInitialBaseline('USDT')
 
-    assert.equal(store.get('strategy_baseline_equity'), 10000, 'Baseline recalculado debe ser 10,000 USDT (aislado de 1 BTC preexistente = $63,150)')
+    assert.equal(resolvedBaseline, 10000, 'Baseline recalculado por la funcion real debe ser 10,000 USDT (aislado de 1 BTC preexistente = $63,150)')
+    assert.equal(store.get('strategy_baseline_equity'), 10000, 'Baseline guardado en store debe ser 10,000 USDT')
     assert.notEqual(store.get('strategy_baseline_equity'), 73150, 'Baseline NO debe incluir el valor del BTC preexistente')
 
-    console.log('PASS: TEST 4 - Recálculo de baseline aislado tras borrado de store JSON verificado (10,000 USDT, no 73,150 USDT)')
+    console.log('PASS: TEST 4 - Recálculo de baseline aislado tras borrado de store JSON verificado llamando a la función real de producción (10,000 USDT, no 73,150 USDT)')
 
   } catch (err) {
     console.error('FAIL SQLite State Reconstruction Test:', err)

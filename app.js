@@ -22,7 +22,7 @@ const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
     store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity,
-    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances
+    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances, resolveInitialBaseline
 } = require('./services/state')
 const {
     getBalances, getPrice, getPriceTick, getMinBuy, clearStart, _sellAll, withdraw
@@ -389,17 +389,7 @@ async function init() {
             store.put(`initial_${MARKET2.toLowerCase()}_balance`, store.get(`${MARKET2.toLowerCase()}_balance`))
         }
 
-        const existingBaseline = store.get('strategy_baseline_equity')
-        if (existingBaseline === undefined || existingBaseline === null) {
-            const baselineEquity = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-            store.put('strategy_baseline_equity', baselineEquity)
-        }
-
-        const existingPeakCurve = store.get('peak_equity_curve')
-        if (existingPeakCurve === undefined || existingPeakCurve === null) {
-            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-            store.put('peak_equity_curve', baselineEquity)
-        }
+        resolveInitialBaseline(MARKET2)
     } else {
         if (SELL_ALL_ON_START) {
             logColor(colors.yellow, '[BOOTSTRAP WARN] SELL_ALL_ON_START está activado en config pero se ignorará por estar en modo RESUME.')
@@ -414,17 +404,7 @@ async function init() {
             reconstructStoreFromSQLite({ symbol: MARKET, store, currentPrice, balances })
         }
 
-        const existingBaseline = store.get('strategy_baseline_equity')
-        if (existingBaseline === undefined || existingBaseline === null) {
-            const baselineEquity = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-            store.put('strategy_baseline_equity', baselineEquity)
-        }
-
-        const existingPeakCurve = store.get('peak_equity_curve')
-        if (existingPeakCurve === undefined || existingPeakCurve === null) {
-            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-            store.put('peak_equity_curve', baselineEquity)
-        }
+        resolveInitialBaseline(MARKET2)
     }
 
     const envStr = USE_TESTNET ? 'TESTNET' : 'MAINNET'
