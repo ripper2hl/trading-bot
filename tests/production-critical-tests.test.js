@@ -1,6 +1,8 @@
 process.env.TEST_MODE = 'true'
 
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
 
 const originalArgv = process.argv.slice()
 const originalEnv = { ...process.env }
@@ -24,11 +26,50 @@ async function runTest(label, fn) {
   }
 }
 
+function resetPersistedStoreFile() {
+  const stateFile = path.join(__dirname, '../data/ETHUSDT.json')
+  try {
+    fs.unlinkSync(stateFile)
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err
+  }
+  fs.writeFileSync(stateFile, '{}')
+}
+
+function resetStoreState(store) {
+  store.store = {}
+  resetPersistedStoreFile()
+  store.put('orders', [])
+  store.put('profits', 0)
+  store.put('fees', 0)
+  store.put('sl_losses', 0)
+  store.put('withdrawal_profits', 0)
+  store.put('drawdown_killed', false)
+  store.put('start_price', 0)
+  store.put('entry_price', 0)
+  store.put('eth_balance', 0)
+  store.put('usdt_balance', 0)
+  store.put('initial_eth_balance', 0)
+  store.put('initial_usdt_balance', 0)
+}
+
+resetPersistedStoreFile()
+
 ;(async () => {
   const { recoverPendingIntent } = require('../app.js')
+  const state = require('../services/state.js')
+  const store = state.store
 
   await runTest('A - recoverPendingIntent SELL no toca entry/start price', async () => {
-    const store = {
+    resetStoreState(store)
+    store.put('start_price', 100)
+    store.put('entry_price', 100)
+    store.put('initial_eth_balance', 10)
+    store.put('initial_usdt_balance', 1000)
+    store.put('eth_balance', 5)
+    store.put('usdt_balance', 1500)
+
+    const localStore = {
       values: {
         start_price: 100,
         entry_price: 100,
@@ -41,26 +82,22 @@ async function runTest(label, fn) {
       put(key, value) { this.values[key] = value }
     }
 
-    await recoverPendingIntent({ side: 'SELL', price: 110 }, { store, getBalances: async () => ({ ETH: 5, USDT: 1500 }) })
+    await recoverPendingIntent({ side: 'SELL', price: 110 }, { store: localStore, getBalances: async () => ({ ETH: 5, USDT: 1500 }) })
 
-    assert.equal(store.get('start_price'), 100)
-    assert.equal(store.get('entry_price'), 100)
+    assert.equal(localStore.get('start_price'), 100)
+    assert.equal(localStore.get('entry_price'), 100)
   })
 
   await runTest('B - _sell partial sale only marks covered orders as sold', async () => {
-    const state = require('../services/state.js')
     const client = require('../services/binance.js')
     const originalPrices = client.prices
     const originalGetBalances = client.accountInfo
 
-    const store = state.store
+    resetStoreState(store)
     store.put('orders', [
       { id: 'o1', amount: 1, status: 'pending', buy_price: 100, sell_price: 101 },
       { id: 'o2', amount: 2, status: 'pending', buy_price: 100, sell_price: 105 },
     ])
-    store.put('profits', 0)
-    store.put('fees', 0)
-    store.put('sl_losses', 0)
     store.put('eth_balance', 3)
     store.put('usdt_balance', 0)
 
@@ -107,6 +144,77 @@ async function runTest(label, fn) {
     } finally {
       client.prices = originalPrices
     }
+  })
+
+  await runTest('D - MAX_OPEN_GRID_ORDERS bloquea la compra', async () => {
+    process.env.MAX_OPEN_GRID_ORDERS = '2'
+    resetStoreState(store)
+
+    // CRITICAL: limpiar TODOS los módulos relevantes del caché DESPUÉS de setear env vars
+    // para que cuando se requieran de nuevo, lean los nuevos valores de env
+    delete require.cache[require.resolve('../config/constants.js')]
+    delete require.cache[require.resolve('../services/exchange.js')]
+    delete require.cache[require.resolve('../controllers/tradingEngine.js')]
+
+    const exchange = require('../services/exchange.js')
+
+    store.put('orders', [
+      { id: 'o1', status: 'bought', amount: 1, buy_price: 100 },
+      { id: 'o2', status: 'bought', amount: 1, buy_price: 101 },
+    ])
+    store.put('usdt_balance', 10000)
+    store.put('eth_balance', 100)
+
+    let marketBuyCalls = 0
+    const originalMarketBuy = exchange.marketBuy
+    exchange.marketBuy = async (...args) => {
+      marketBuyCalls += 1
+      return { status: 'FILLED', executedQty: '1', fills: [{ price: '100', commission: '0' }] }
+    }
+
+    // Luego require tradingEngine para que desestructure con las nuevas constantes
+    const { _buy } = require('../controllers/tradingEngine.js')
+
+    // Capturar logs para verificar que el guard fue ejecutado
+    let capturedLogs = []
+    const originalLog = console.log
+    const originalError = console.error
+    console.log = (...args) => {
+      capturedLogs.push(args.join(' '))
+    }
+    console.error = (...args) => {
+      capturedLogs.push(args.join(' '))
+    }
+
+    try {
+      await _buy(100, 40, async () => {}, () => {})
+      
+      // Verificación 1: marketBuyCalls debe ser 0 (el guard bloqueó antes de llegar a marketBuy)
+      assert.equal(marketBuyCalls, 0, `Expected marketBuyCalls to be 0 (guard should block), got ${marketBuyCalls}`)
+      
+      // Verificación 2: el log debe contener el mensaje del guard "[GRID]"
+      const hasGuardLog = capturedLogs.some(log => log.includes('[GRID]') && log.includes('Máximo de órdenes compradas'))
+      assert.ok(hasGuardLog, `Expected guard log with '[GRID]' and 'Máximo de órdenes compradas' in output, but got:\n${capturedLogs.join('\n')}`)
+      
+      // Verificación 3: el log NO debe contener "Buying ETH" (eso significaría que saltó el guard)
+      const hasBuyingLog = capturedLogs.some(log => log.includes('Buying ETH'))
+      assert.ok(!hasBuyingLog, `Guard should have prevented 'Buying ETH' log, but it appeared in:\n${capturedLogs.join('\n')}`)
+    } finally {
+      console.log = originalLog
+      console.error = originalError
+      exchange.marketBuy = originalMarketBuy
+    }
+  })
+
+  await runTest('E - el kill-switch persiste a través de un reinicio simulado', async () => {
+    resetStoreState(store)
+    store.put('drawdown_killed', true)
+    delete require.cache[require.resolve('../controllers/tradingEngine.js')]
+
+    const freshTradingEngine = require('../controllers/tradingEngine.js')
+
+    assert.equal(freshTradingEngine.isDrawdownKilled(), true)
+    assert.equal(store.get('drawdown_killed'), true)
   })
 })().catch((err) => {
   console.error('UNHANDLED:', err)

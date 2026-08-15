@@ -61,6 +61,7 @@ function validateBootstrapConfig() {
         TAKE_PROFIT_PERCENT: process.env.TAKE_PROFIT_PERCENT,
         MAX_POSITION_PERCENT: process.env.MAX_POSITION_PERCENT,
         DRAWDOWN_KILL_PERCENT: process.env.DRAWDOWN_KILL_PERCENT,
+        MAX_OPEN_GRID_ORDERS: process.env.MAX_OPEN_GRID_ORDERS,
         FEE_RATE: process.env.FEE_RATE,
         POLL_INTERVAL_MS: process.env.POLL_INTERVAL_MS,
         TRAILING_TP_PERCENT: process.env.TRAILING_TP_PERCENT,
@@ -73,6 +74,7 @@ function validateBootstrapConfig() {
         'TAKE_PROFIT_PERCENT',
         'MAX_POSITION_PERCENT',
         'DRAWDOWN_KILL_PERCENT',
+        'MAX_OPEN_GRID_ORDERS',
     ])
 
     for (const [key, value] of Object.entries(numericChecks)) {
@@ -100,6 +102,7 @@ const STOP_LOSS_PERCENT = ensureValidNumeric(process.env.STOP_LOSS_PERCENT, 'STO
 const TAKE_PROFIT_PERCENT = ensureValidNumeric(process.env.TAKE_PROFIT_PERCENT, 'TAKE_PROFIT_PERCENT', 5)
 const MAX_POSITION_PERCENT = ensureValidNumeric(process.env.MAX_POSITION_PERCENT, 'MAX_POSITION_PERCENT', 5)
 const DRAWDOWN_KILL_PERCENT = ensureValidNumeric(process.env.DRAWDOWN_KILL_PERCENT, 'DRAWDOWN_KILL_PERCENT', 10)
+const MAX_OPEN_GRID_ORDERS = ensureValidNumeric(process.env.MAX_OPEN_GRID_ORDERS, 'MAX_OPEN_GRID_ORDERS', 10)
 const TRAILING_TP_PERCENT = ensureValidNumeric(process.env.TRAILING_TP_PERCENT, 'TRAILING_TP_PERCENT', 0)
 const FEE_RATE = ensureValidNumeric(process.env.FEE_RATE, 'FEE_RATE', 0.001)
 const POLL_INTERVAL_MS = Math.max(1000, Math.round(toNumber(process.env.POLL_INTERVAL_MS, 10000)))
@@ -148,6 +151,7 @@ module.exports = {
     DRY_RUN,
     MAX_POSITION_PERCENT,
     DRAWDOWN_KILL_PERCENT,
+    MAX_OPEN_GRID_ORDERS,
     TRAILING_TP_PERCENT,
     FEE_RATE,
     POLL_INTERVAL_MS,

@@ -5,21 +5,25 @@
  */
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
-    SELL_PERCENT, MAX_POSITION_PERCENT, FEE_RATE, TRAILING_TP_PERCENT,
+    SELL_PERCENT, MAX_POSITION_PERCENT, MAX_OPEN_GRID_ORDERS, FEE_RATE, TRAILING_TP_PERCENT,
     GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO
 } = require('../config/constants')
 const { log, logColor, colors } = require('../utils/logger')
 const { store, _newPriceReset, _calculateProfits } = require('../services/state')
 const { marketBuy, marketSell, getBalances, getPrice, getQuantity, getFees } = require('../services/exchange')
 
-// Estado mutable del kill-switch (gestionado externamente por broadcast)
-let drawdownKilled = false
+// Estado mutable del kill-switch (persistido en store para sobrevivir reinicios)
+let drawdownKilled = Boolean(store.get('drawdown_killed'))
 
 function setDrawdownKilled(value) {
-    drawdownKilled = value
+    drawdownKilled = Boolean(value)
+    store.put('drawdown_killed', drawdownKilled)
 }
 
 function isDrawdownKilled() {
+    const persistedValue = store.get('drawdown_killed')
+    const parsedValue = persistedValue === true || persistedValue === 'true' || persistedValue === 1 || persistedValue === '1'
+    drawdownKilled = parsedValue
     return drawdownKilled
 }
 
@@ -94,15 +98,19 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
         return
     }
 
-    const currentBalance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`))
     const orders = store.get('orders') || []
-    const totalExposure = orders
-        .filter(order => order && order.status === 'bought')
-        .reduce((sum, order) => {
-            const orderAmount = parseFloat(order.amount) || 0
-            const orderPrice = parseFloat(order.buy_price) || 0
-            return sum + (orderAmount * orderPrice)
-        }, 0)
+    const boughtOrders = orders.filter(order => order && order.status === 'bought')
+    if (boughtOrders.length >= MAX_OPEN_GRID_ORDERS) {
+        logColor(colors.yellow, `[GRID] Máximo de órdenes compradas activo alcanzado (${MAX_OPEN_GRID_ORDERS}). Compra bloqueada.`)
+        return
+    }
+
+    const currentBalance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`))
+    const totalExposure = boughtOrders.reduce((sum, order) => {
+        const orderAmount = parseFloat(order.amount) || 0
+        const orderPrice = parseFloat(order.buy_price) || 0
+        return sum + (orderAmount * orderPrice)
+    }, 0)
     const maxAllowed = currentBalance * (MAX_POSITION_PERCENT / 100)
     const projectedExposure = totalExposure + parseFloat(BUY_ORDER_AMOUNT)
 

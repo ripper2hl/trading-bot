@@ -262,6 +262,10 @@ async function init() {
         process.exit(1)
     }
 
+    if (isDrawdownKilled()) {
+        logColor(colors.red, '[BOOTSTRAP] Kill-switch restaurado desde el store: operaciones bloqueadas por drawdown previo.')
+    }
+
     const pendingIntents = getPendingIntents()
     if (pendingIntents.length > 0) {
         console.error('[BOOTSTRAP] Detectados intents PENDING en el ledger: posible crash detectado.')

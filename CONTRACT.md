@@ -6,6 +6,8 @@ Regla: antes de tocar cualquier archivo que lea process.env o config/constants.j
 
 ## Inventario completo y verificado del bot
 
+La decisión final y autorizada por el usuario es adoptar como nombres definitivos los introducidos en el commit c474357, ratificados explícitamente el 2026-08-14.
+
 | Variable | Uso | ¿Está definida en .env real? | ¿Qué pasa si falta en .env? |
 |---|---|---|---|
 | BINANCE_API_KEY | API key de Binance | Sí | Se valida como obligatorio; no hay default seguro |
@@ -18,6 +20,7 @@ Regla: antes de tocar cualquier archivo que lea process.env o config/constants.j
 | TAKE_PROFIT_PERCENT | % de take-profit por posición | No | Default 5 |
 | MAX_POSITION_PERCENT | % máximo de balance por orden individual | No | Default 5 |
 | DRAWDOWN_KILL_PERCENT | % de drawdown que activa el kill-switch | No | Default 10 |
+| MAX_OPEN_GRID_ORDERS | Máximo de órdenes compradas activas simultáneas en grid | No | Default 10 |
 | FEE_RATE | Tasa de fee de Binance | No | Default 0.001 |
 | POLL_INTERVAL_MS | Intervalo de polling del bot | No | Default 10000 |
 | TRAILING_TP_PERCENT | Trailing take-profit | No | Default 0 |
@@ -57,20 +60,14 @@ Estas aparecen en el grep general de `process.env` porque son usadas por Node o 
 - HOME
 - HTTP_PROXY
 - HTTPS_PROXY
-- INVALID
 - LIBC
 - NODE_DEBUG
 - NODE_ENV
 - NODE_NDEBUG
 - NO_DEPRECATION
 - NO_PROXY
-- NOTIFY_TELEGRAM_ON
-- POLL_INTERVAL_MS
 - PREBUILDS_ONLY
 - READABLE_STREAM
-- SELL_ALL_ON_CLOSE
-- SELL_ALL_ON_START
-- START_AGAIN
 - TEST_GRACEFUL_FS_GLOBAL_PATCH
 - TESTING_TAR_FAKE_PLATFORM
 - TRACE_DEPRECATION
@@ -81,5 +78,7 @@ Estas aparecen en el grep general de `process.env` porque son usadas por Node o 
 Última verificación: 2026-08-14.
 - .env real revisado con: `grep -E '^[A-Z_]+=' .env | cut -d'=' -f1 | sort`
 - inventory del código revisado con: `grep -rhoE 'process\.env\.[A-Z_]+' --include='*.js' . | sort -u`
+
+Autorizado explícitamente por el usuario el 2026-08-14, ratificando los nombres introducidos en el commit c474357.
 
 Si hay que agregar más variables de configuración del bot, solo se hace con autorización explícita del usuario; no se inventan ni se "mejoran" nombres a cargo de herramientas de IA.
