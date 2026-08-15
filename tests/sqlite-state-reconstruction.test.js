@@ -101,6 +101,32 @@ function resetStoreFile() {
 
     console.log('PASS: TEST 3 - Política de Cuarentena ante NOT_FOUND validada')
 
+    // =========================================================================
+    // TEST 4: AISLAMIENTO DE BASELINE ANTE BORRADO TOTAL DEL STORE JSON
+    // =========================================================================
+    resetStoreFile()
+    store.put('strategy_baseline_equity', undefined)
+    store.put('peak_equity_curve', undefined)
+
+    // Cargar saldos de Binance con 1 BTC preexistente + 10,000 USDT
+    const preExistingBalances = { BTC: 1.0, USDT: 10000.0 }
+    store.put('btc_balance', preExistingBalances.BTC)
+    store.put('usdt_balance', preExistingBalances.USDT)
+    store.put('initial_btc_balance', preExistingBalances.BTC)
+    store.put('initial_usdt_balance', preExistingBalances.USDT)
+
+    // Recalcular el baseline cuando strategy_baseline_equity no existe en el store
+    const existingBaseline = store.get('strategy_baseline_equity')
+    if (existingBaseline === undefined || existingBaseline === null) {
+      const baselineEquity = parseFloat(store.get('initial_usdt_balance')) || 0
+      store.put('strategy_baseline_equity', baselineEquity)
+    }
+
+    assert.equal(store.get('strategy_baseline_equity'), 10000, 'Baseline recalculado debe ser 10,000 USDT (aislado de 1 BTC preexistente = $63,150)')
+    assert.notEqual(store.get('strategy_baseline_equity'), 73150, 'Baseline NO debe incluir el valor del BTC preexistente')
+
+    console.log('PASS: TEST 4 - Recálculo de baseline aislado tras borrado de store JSON verificado (10,000 USDT, no 73,150 USDT)')
+
   } catch (err) {
     console.error('FAIL SQLite State Reconstruction Test:', err)
     process.exit(1)

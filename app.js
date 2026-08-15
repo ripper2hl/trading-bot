@@ -122,7 +122,7 @@ async function broadcast() {
             if (DRY_RUN) logColor(colors.yellow, '>>> MODO DRY-RUN ACTIVO (sin ordenes reales) <<<')
             log(`Running Time: ${elapsedTime()}`)
             const totalProfits = parseFloat(store.get('profits')) || 0
-            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || getInitialEquity(marketPrice)
+            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
             const totalProfitsPercent = baselineEquity > 0
                 ? parseFloat((100 * totalProfits / baselineEquity).toFixed(3))
                 : 0
@@ -391,13 +391,13 @@ async function init() {
 
         const existingBaseline = store.get('strategy_baseline_equity')
         if (existingBaseline === undefined || existingBaseline === null) {
-            const baselineEquity = getInitialEquity(price)
+            const baselineEquity = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
             store.put('strategy_baseline_equity', baselineEquity)
         }
 
         const existingPeakCurve = store.get('peak_equity_curve')
         if (existingPeakCurve === undefined || existingPeakCurve === null) {
-            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || getInitialEquity(price)
+            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
             store.put('peak_equity_curve', baselineEquity)
         }
     } else {
@@ -412,6 +412,18 @@ async function init() {
             const balances = await getBalances()
             logColor(colors.yellow, '[BOOTSTRAP] Reconstruyendo vista de estado local a partir del Ledger SQLite...')
             reconstructStoreFromSQLite({ symbol: MARKET, store, currentPrice, balances })
+        }
+
+        const existingBaseline = store.get('strategy_baseline_equity')
+        if (existingBaseline === undefined || existingBaseline === null) {
+            const baselineEquity = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
+            store.put('strategy_baseline_equity', baselineEquity)
+        }
+
+        const existingPeakCurve = store.get('peak_equity_curve')
+        if (existingPeakCurve === undefined || existingPeakCurve === null) {
+            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
+            store.put('peak_equity_curve', baselineEquity)
         }
     }
 
