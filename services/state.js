@@ -51,6 +51,18 @@ function getRealProfits(price) {
     return parseFloat(parseFloat((m1Balance - initialBalance1) * price + m2Balance) - initialBalance2).toFixed(4)
 }
 
+/**
+ * Calcula el equity inicial total en unidades de MARKET2.
+ * Formula: initial_USDT + (initial_BTC * precio_actual)
+ * Esto da el valor real de la cartera al momento de arranque,
+ * incluyendo cualquier base asset preexistente (e.g. BTC regalado por Testnet).
+ */
+function getInitialEquity(price) {
+    const initialBalance1 = parseFloat(store.get(`initial_${MARKET1.toLowerCase()}_balance`)) || 0
+    const initialBalance2 = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
+    return initialBalance1 * price + initialBalance2
+}
+
 function _logProfits(price) {
     const profits = parseFloat(store.get('profits'))
     var isGainerProfit = profits > 0 ? 1 : profits < 0 ? 2 : 0
@@ -62,12 +74,13 @@ function _logProfits(price) {
 
     const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`))
     const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`))
-    const initialBalance = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`))
+    const currentEquity = m1Balance * price + m2Balance
+    const initialEquity = getInitialEquity(price)
 
     logColor(colors.gray,
         `Balance: ${m1Balance} ${MARKET1}, ${m2Balance.toFixed(2)} ${MARKET2}`)
     logColor(colors.gray,
-        `Current: ${parseFloat(m1Balance * price + m2Balance).toFixed(2)} ${MARKET2}, Initial: ${initialBalance.toFixed(2)} ${MARKET2}`)
+        `Current: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2}`)
 }
 
 async function reconcileBalances(getBalances, tolerancePercent = 1) {
@@ -115,6 +128,7 @@ module.exports = {
     _updateBalances,
     _calculateProfits,
     getRealProfits,
+    getInitialEquity,
     _logProfits,
     reconcileBalances,
     _closeBot,

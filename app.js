@@ -18,12 +18,12 @@ const { log, logColor, colors } = require('./utils/logger')
 const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
-    store, elapsedTime, _updateBalances, getRealProfits, _logProfits, _closeBot, reconcileBalances
+    store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity, _logProfits, _closeBot, reconcileBalances
 } = require('./services/state')
 const {
     getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw
 } = require('./services/exchange')
-const { getPendingIntents, updateIntent } = require('./services/ledger')
+const { getPendingIntents, updateIntent, db } = require('./services/ledger')
 const {
     _buy, _sell, getToSold, setDrawdownKilled, isDrawdownKilled
 } = require('./controllers/tradingEngine')
@@ -99,9 +99,9 @@ async function broadcast() {
                 log('===========================================================')
                 const totalProfits = getRealProfits(marketPrice)
 
-                const initialBal = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-                if (initialBal > 0 && !isNaN(totalProfits)) {
-                    const drawdownPercent = parseFloat((-100 * totalProfits / initialBal).toFixed(3))
+                const initialEquity = getInitialEquity(marketPrice)
+                if (initialEquity > 0 && !isNaN(totalProfits)) {
+                    const drawdownPercent = parseFloat((-100 * totalProfits / initialEquity).toFixed(3))
                     if (drawdownPercent >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
                         setDrawdownKilled(true)
                         logColor(colors.red, `[KILL-SWITCH] Drawdown de ${drawdownPercent}% supera el limite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
@@ -111,9 +111,9 @@ async function broadcast() {
                 }
 
                 if (!isNaN(totalProfits)) {
-                    const initialProfitBalance = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-                    const totalProfitsPercent = initialProfitBalance > 0
-                        ? parseFloat((100 * totalProfits / initialProfitBalance).toFixed(3))
+                    const initialEquityForProfits = getInitialEquity(marketPrice)
+                    const totalProfitsPercent = initialEquityForProfits > 0
+                        ? parseFloat((100 * totalProfits / initialEquityForProfits).toFixed(3))
                         : 0
                     log(`Withdrawal profits: ${parseFloat(store.get('withdrawal_profits')).toFixed(2)} ${MARKET2}`)
                     logColor(totalProfits < 0 ? colors.red : totalProfits == 0 ? colors.gray : colors.green,
@@ -154,7 +154,10 @@ async function broadcast() {
                 const entryPrice = store.get('entry_price')
                 const entryFactor = (marketPrice - entryPrice)
                 const entryPercent = parseFloat(100 * entryFactor / entryPrice).toFixed(2)
-                log(`Entry price: ${store.get('entry_price')} ${MARKET2} (${entryPercent <= 0 ? '' : '+'}${entryPercent}%)`)
+                const activeOrders = store.get('orders') || []
+                const hasBoughtOrders = activeOrders.some(o => o && o.status === 'bought')
+                const priceLabel = hasBoughtOrders ? 'Entry price' : 'Reference price'
+                log(`${priceLabel}: ${store.get('entry_price')} ${MARKET2} (${entryPercent <= 0 ? '' : '+'}${entryPercent}%)`)
                 log('===========================================================')
 
                 log(`Prev price: ${startPrice} ${MARKET2}`)
@@ -338,6 +341,128 @@ async function init() {
 
     broadcast()
 }
+
+// === GLOBAL ERROR HANDLERS ===
+
+/**
+ * notifyFatalError: Intenta notificar por Telegram de forma segura.
+ * Usa valores por defecto si store/MARKET no están disponibles (crasheo temprano).
+ * Nunca lanza excepción — todo error es capturado internamente.
+ */
+async function notifyFatalError(error) {
+    try {
+        let runningTime = 'N/A'
+        let market = 'N/A'
+        let market1 = 'N/A'
+        let market2 = 'N/A'
+        let balance1 = 'N/A'
+        let balance2 = 'N/A'
+        let startTime = 'N/A'
+
+        try {
+            runningTime = elapsedTime()
+        } catch (e) {
+            // store.get('start_time') puede no existir en crasheo temprano
+        }
+
+        try {
+            market = MARKET || 'UNKNOWN'
+            market1 = MARKET1 || 'UNKNOWN'
+            market2 = MARKET2 || 'UNKNOWN'
+        } catch (e) {
+            // MARKET variables pueden no estar disponibles
+        }
+
+        try {
+            balance1 = store.get(`${MARKET1.toLowerCase()}_balance`) || 'N/A'
+            balance2 = store.get(`${MARKET2.toLowerCase()}_balance`) || 'N/A'
+        } catch (e) {
+            // store no disponible
+        }
+
+        try {
+            startTime = moment(store.get('start_time')).format('DD/MM/YYYY HH:mm')
+        } catch (e) {
+            startTime = 'N/A'
+        }
+
+        // Llamar a NotifyTelegram con timeout
+        await Promise.race([
+            NotifyTelegram({
+                runningTime,
+                market,
+                market1,
+                market2,
+                price: null,
+                balance1,
+                balance2,
+                gridProfits: 'N/A',
+                realProfits: 'N/A',
+                start: startTime,
+                from: 'risk'
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Telegram timeout')), 2000))
+        ])
+    } catch (notifyErr) {
+        // No hacer nada — si esto falla, al menos ya se loguró el error original
+        // y continuaremos con cleanup y exit
+    }
+}
+
+/**
+ * cleanupOnFatal: Intenta cancelar órdenes abiertas de forma segura.
+ * Captura todos los errores internamente — nunca lanza excepción.
+ */
+async function cleanupOnFatal() {
+    try {
+        await Promise.race([
+            emergencyCleanUp(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Cleanup timeout')), 3000))
+        ])
+    } catch (cleanupErr) {
+        // Error ya logurado por emergencyCleanUp o por timeout — continuar
+    }
+}
+
+process.on('uncaughtException', async (error) => {
+    logColor(colors.red, `[UNCAUGHT EXCEPTION] ${error.message || error}`)
+    if (error.stack) logColor(colors.red, error.stack)
+
+    await notifyFatalError(error)
+    await cleanupOnFatal()
+
+    logColor(colors.red, `[FATAL] Terminando proceso por excepción no capturada.`)
+    process.exit(1)
+})
+
+process.on('unhandledRejection', async (reason, promise) => {
+    logColor(colors.red, `[UNHANDLED REJECTION] ${reason?.message || String(reason)}`)
+    if (reason?.stack) logColor(colors.red, reason.stack)
+
+    await notifyFatalError(reason)
+    await cleanupOnFatal()
+
+    logColor(colors.red, `[FATAL] Terminando proceso por rechazo de promesa no capturado.`)
+    process.exit(1)
+})
+
+process.on('SIGTERM', async () => {
+    logColor(colors.yellow, `[SIGTERM] Recibida señal de terminación. Cancelando órdenes abiertas...`)
+
+    await cleanupOnFatal()
+
+    // Cierra la base de datos
+    logColor(colors.yellow, `[SIGTERM] Cerrando conexión de base de datos...`)
+    try {
+        db.close()
+        logColor(colors.gray, `[SIGTERM] Base de datos cerrada exitosamente.`)
+    } catch (err) {
+        logColor(colors.red, `[SIGTERM] Error al cerrar base de datos: ${err.message || err}`)
+    }
+
+    logColor(colors.yellow, `[SIGTERM] Terminando proceso.`)
+    process.exit(0)
+})
 
 if (require.main === module) {
     init()
