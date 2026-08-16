@@ -10,9 +10,10 @@ services:
     environment:
       - USE_TESTNET=true
       - DRY_RUN=false
+    user: "${UID:-1000}:${GID:-1000}"
     volumes:
       # Persistir datos y logs en tu host para que no se pierdan si el contenedor muere
-      - ./data:/app/data
-      - ./logs:/app/logs
+      - ./data:/app/data:z
+      - ./logs:/app/logs:z
     # Argumentos para correr la app: node app.js <MARKET1> <MARKET2> <BUY_AMOUNT> [resume]
-    command: ["node", "app.js", "BTC", "USDT", "5", "resume"]
+    command: [ "node", "app.js", "BTC", "USDT", "15", "resume" ]

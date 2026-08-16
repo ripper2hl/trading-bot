@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-slim
 
 # Establecer directorio de trabajo
 WORKDIR /app
@@ -7,13 +7,10 @@ WORKDIR /app
 COPY package*.json ./
 
 # Instalar dependencias de compilacion para better-sqlite3
-RUN apk add --no-cache python3 make g++
+RUN apt-get update && apt-get install -y python3 make g++ && rm -rf /var/lib/apt/lists/*
 
-# Instalar solo dependencias de produccion
+# Instalar dependencias
 RUN npm ci --only=production
-
-# Limpiar las dependencias de compilacion para reducir peso
-RUN apk del python3 make g++
 
 # Copiar el resto del codigo de la aplicacion
 COPY . .
@@ -22,4 +19,4 @@ COPY . .
 RUN mkdir -p data logs
 
 # Comando por defecto (puede ser sobreescrito al correr el contenedor)
-CMD ["node", "app.js", "BTC", "USDT", "5"]
+CMD ["node", "app.js", "BTC", "USDT", "15"]
