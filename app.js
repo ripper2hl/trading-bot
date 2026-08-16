@@ -13,7 +13,7 @@ const {
     SELL_ALL_ON_CLOSE, SELL_ALL_ON_START, START_AGAIN,
     WITHDRAW_PROFITS_ENABLED, MIN_WITHDRAW_AMOUNT,
     GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO,
-    BALANCE_ABSOLUTE_TOLERANCE_BASE, USE_TESTNET,
+    BALANCE_ABSOLUTE_TOLERANCE_BASE, USE_TESTNET, MULTIPLICADOR_ATR,
     validateBootstrapConfig
 } = require('./config/constants')
 const client = require('./services/binance')
@@ -25,7 +25,7 @@ const {
     getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances, resolveInitialBaseline
 } = require('./services/state')
 const {
-    getBalances, getPrice, getPriceTick, getMinBuy, clearStart, _sellAll, withdraw
+    getBalances, getPrice, getPriceTick, getMinBuy, clearStart, _sellAll, withdraw, getKlines
 } = require('./services/exchange')
 const { getPendingIntents, updateIntent, reconstructStoreFromSQLite, db } = require('./services/ledger')
 const { acquirePidLock } = require('./services/pidLock')
@@ -79,6 +79,46 @@ async function updateBalances() {
     await _updateBalances(getBalances)
 }
 
+// === INDICADOR ATR ===
+let currentATR = 0
+let lastATRUpdate = 0
+
+function calculateATR(klines) {
+    if (!klines || klines.length === 0) return 0
+    let trs = []
+    for (let i = 1; i < klines.length; i++) {
+        const high = klines[i].high
+        const low = klines[i].low
+        const prevClose = klines[i-1].close
+        const tr1 = high - low
+        const tr2 = Math.abs(high - prevClose)
+        const tr3 = Math.abs(low - prevClose)
+        trs.push(Math.max(tr1, tr2, tr3))
+    }
+    if (trs.length === 0) return 0
+    const sumTR = trs.reduce((acc, val) => acc + val, 0)
+    return sumTR / trs.length
+}
+
+async function updateDynamicGrid(currentPrice) {
+    try {
+        const klines = await getKlines(MARKET, '15m', 15)
+        currentATR = calculateATR(klines)
+        if (currentATR > 0 && currentPrice > 0) {
+            let percent = (currentATR / currentPrice) * 100 * MULTIPLICADOR_ATR
+            const MIN_GRID_PERCENT = 0.2
+            const MAX_GRID_PERCENT = 5.0
+            percent = Math.max(MIN_GRID_PERCENT, Math.min(MAX_GRID_PERCENT, percent))
+            
+            store.put('dynamic_buy_percent', percent)
+            store.put('dynamic_sell_percent', percent)
+            logColor(colors.cyan, `[ATR] Actualizado: ${currentATR.toFixed(2)} USD. Nuevo Grid Dinámico: ${percent.toFixed(3)}%`)
+        }
+    } catch (err) {
+        logColor(colors.yellow, `[ATR WARN] No se pudo actualizar ATR: ${err.message || err}`)
+    }
+}
+
 // === BUCLE PRINCIPAL ===
 
 async function broadcast() {
@@ -115,12 +155,22 @@ async function broadcast() {
                 continue
             }
 
+            const now = Date.now()
+            if (now - lastATRUpdate > 15 * 60 * 1000) {
+                await updateDynamicGrid(tick ? tick.price : 0)
+                lastATRUpdate = now
+            }
+
             const marketPrice = tick.price
             const startPrice = store.get('start_price')
+            
+            const dynBuy = parseFloat(store.get('dynamic_buy_percent')) || BUY_PERCENT
+            const dynSell = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
 
             console.clear()
             if (DRY_RUN) logColor(colors.yellow, '>>> MODO DRY-RUN ACTIVO (sin ordenes reales) <<<')
             log(`Running Time: ${elapsedTime()}`)
+            logColor(colors.cyan, `ATR (15m): $${currentATR.toFixed(2)} | Grid Dinámico: Buy ${dynBuy.toFixed(2)}% / Sell ${dynSell.toFixed(2)}%`)
             const totalProfits = parseFloat(store.get('profits')) || 0
             const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
             const totalProfitsPercent = baselineEquity > 0
@@ -197,7 +247,7 @@ async function broadcast() {
                         `New price: ${marketPrice} ${MARKET2} ==> -${parseFloat(percent).toFixed(3)}%`)
                     store.put('percent', `-${parseFloat(percent).toFixed(3)}`)
 
-                    if (percent >= BUY_PERCENT)
+                    if (percent >= dynBuy)
                         await _buy(marketPrice, BUY_ORDER_AMOUNT, updateBalances, _notifyTelegram)
                 } else {
                     const factor = (marketPrice - startPrice)
@@ -407,11 +457,18 @@ async function init() {
         resolveInitialBaseline(MARKET2)
     }
 
+    // Fetch inicial de ATR antes del log de auditoria
+    const currentPrice = await getPrice(MARKET)
+    await updateDynamicGrid(currentPrice)
+
     const envStr = USE_TESTNET ? 'TESTNET' : 'MAINNET'
     const dryRunStr = DRY_RUN ? 'true' : 'false'
     const withdrawStr = WITHDRAW_PROFITS_ENABLED ? 'true' : 'false'
     const baselineStr = `${(parseFloat(store.get('strategy_baseline_equity')) || 0).toFixed(2)} ${MARKET2}`
     const openOrdersCount = Array.isArray(store.get('orders')) ? store.get('orders').length : 0
+    const dynBuyStr = `${(parseFloat(store.get('dynamic_buy_percent')) || BUY_PERCENT).toFixed(2)}%`
+    const dynSellStr = `${(parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT).toFixed(2)}%`
+    const atrStr = `$${currentATR.toFixed(2)}`
 
     console.log(`
 +--------------------------------------------------------+
@@ -422,6 +479,9 @@ async function init() {
 | WITHDRAW_PROFITS_ENABLE: ${withdrawStr.padEnd(29)} |
 | Initial Baseline Equity: ${baselineStr.padEnd(29)} |
 | Open Orders Activas:     ${String(openOrdersCount).padEnd(29)} |
+| ATR 15m (Volatility):    ${atrStr.padEnd(29)} |
+| Dynamic Grid Buy:        ${dynBuyStr.padEnd(29)} |
+| Dynamic Grid Sell:       ${dynSellStr.padEnd(29)} |
 | PID Lock Status:         OK                            |
 +--------------------------------------------------------+
 `)

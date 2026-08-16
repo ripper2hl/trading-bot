@@ -31,6 +31,14 @@ function createStubClient() {
         allOrders: async () => [],
         exchangeInfo: async () => ({ symbols: [] }),
         withdraw: async () => ({ status: 'success' }),
+        getKlines: async (symbol, interval, limit) => {
+            // Mock velas para el stub
+            return Array(limit).fill({
+                high: '60100',
+                low: '59900',
+                close: '60000'
+            })
+        }
     }
 }
 
@@ -55,5 +63,10 @@ if (TEST_MODE) {
     }
 
     const client = Binance(clientOptions)
+    
+    client.getKlines = async (symbol, interval, limit) => {
+        return await client.candles({ symbol, interval, limit })
+    }
+
     module.exports = client
 }

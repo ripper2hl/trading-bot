@@ -106,6 +106,7 @@ const MAX_OPEN_GRID_ORDERS = ensureValidNumeric(process.env.MAX_OPEN_GRID_ORDERS
 const TRAILING_TP_PERCENT = ensureValidNumeric(process.env.TRAILING_TP_PERCENT, 'TRAILING_TP_PERCENT', 0)
 const FEE_RATE = ensureValidNumeric(process.env.FEE_RATE, 'FEE_RATE', 0.001)
 const POLL_INTERVAL_MS = Math.max(1000, Math.round(toNumber(process.env.POLL_INTERVAL_MS, 10000)))
+const MULTIPLICADOR_ATR = ensureValidNumeric(process.env.MULTIPLICADOR_ATR, 'MULTIPLICADOR_ATR', 1)
 
 // ─── GRID STOP-LOSS ─────────────────────────────────────────────
 const GRID_STOP_LOSS_ENABLED = process.env.GRID_STOP_LOSS_ENABLED === 'true' || process.env.GRID_STOP_LOSS_ENABLED === '1'
@@ -159,6 +160,7 @@ module.exports = {
     TRAILING_TP_PERCENT,
     FEE_RATE,
     POLL_INTERVAL_MS,
+    MULTIPLICADOR_ATR,
     // Grid stop-loss
     GRID_STOP_LOSS_ENABLED,
     GRID_STOP_LOSS_PERCENT,

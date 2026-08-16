@@ -337,6 +337,11 @@ async function _sellAll() {
     }
 }
 
+async function getKlines(symbol, interval, limit) {
+    const klines = await withBackoff(() => client.getKlines(symbol, interval, limit))
+    return klines
+}
+
 module.exports = {
     marketBuy,
     marketSell,
@@ -349,5 +354,6 @@ module.exports = {
     clearStart,
     _sellAll,
     withdraw,
+    getKlines,
     logFail
 }

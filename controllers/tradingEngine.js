@@ -123,7 +123,8 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
     if (currentBalance >= BUY_ORDER_AMOUNT) {
         const activeOrders = store.get('orders') || []
 
-        const targetNetPercent = SELL_PERCENT / 100
+        const dynamicSellPercent = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
+        const targetNetPercent = dynamicSellPercent / 100
         const netMultiplier = (1 + targetNetPercent) / ((1 - FEE_RATE) * (1 - FEE_RATE))
         const targetSellPrice = price * netMultiplier
         var slFactor = GRID_STOP_LOSS_PERCENT * price / 100
@@ -140,7 +141,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
         }
 
         log(`
-            Buying ${MARKET1} (Target Net Profit: ${SELL_PERCENT}%)
+            Buying ${MARKET1} (Target Net Profit: ${dynamicSellPercent.toFixed(2)}%)
             ==================
             amountIn: ${parseFloat(BUY_ORDER_AMOUNT).toFixed(2)} ${MARKET2}
             amountOut: ${(BUY_ORDER_AMOUNT / price).toFixed(6)} ${MARKET1}
