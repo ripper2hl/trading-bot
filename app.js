@@ -84,28 +84,46 @@ let currentATR = 0
 let lastATRUpdate = 0
 
 function calculateATR(klines) {
-    if (!klines || klines.length === 0) return 0
+    if (!klines || !Array.isArray(klines) || klines.length === 0) return 0
     let trs = []
     for (let i = 1; i < klines.length; i++) {
-        const high = klines[i].high
-        const low = klines[i].low
-        const prevClose = klines[i-1].close
+        const high = parseFloat(klines[i].high)
+        const low = parseFloat(klines[i].low)
+        const prevClose = parseFloat(klines[i-1].close)
+        
+        if (isNaN(high) || isNaN(low) || isNaN(prevClose)) continue
+
         const tr1 = high - low
         const tr2 = Math.abs(high - prevClose)
         const tr3 = Math.abs(low - prevClose)
         trs.push(Math.max(tr1, tr2, tr3))
     }
-    if (trs.length === 0) return 0
+    if (trs.length < 5) return 0
     const sumTR = trs.reduce((acc, val) => acc + val, 0)
-    return sumTR / trs.length
+    const atr = sumTR / trs.length
+    
+    return isNaN(atr) || !Number.isFinite(atr) ? 0 : atr
 }
 
 async function updateDynamicGrid(currentPrice) {
     try {
         const klines = await getKlines(MARKET, '15m', 15)
-        currentATR = calculateATR(klines)
-        if (currentATR > 0 && currentPrice > 0) {
+        const atrValue = calculateATR(klines)
+        
+        if (atrValue <= 0 || !Number.isFinite(atrValue) || isNaN(atrValue)) {
+            logColor(colors.yellow, `[ATR WARN] Valor inválido o cero: ${atrValue}. Se mantiene el grid anterior.`)
+            return
+        }
+        
+        currentATR = atrValue
+        if (currentPrice > 0) {
             let percent = (currentATR / currentPrice) * 100 * MULTIPLICADOR_ATR
+            
+            if (isNaN(percent) || !Number.isFinite(percent) || percent <= 0) {
+                logColor(colors.yellow, `[ATR WARN] Cálculo de % inválido: ${percent}. Se mantiene el grid anterior.`)
+                return
+            }
+
             const MIN_GRID_PERCENT = 0.2
             const MAX_GRID_PERCENT = 5.0
             percent = Math.max(MIN_GRID_PERCENT, Math.min(MAX_GRID_PERCENT, percent))
@@ -618,4 +636,6 @@ if (require.main === module) {
 module.exports = {
     recoverPendingIntent,
     init,
+    calculateATR,
+    updateDynamicGrid,
 }
