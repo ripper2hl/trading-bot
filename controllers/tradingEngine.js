@@ -10,7 +10,7 @@ const {
 } = require('../config/constants')
 const { log, logColor, colors } = require('../utils/logger')
 const { store, _newPriceReset, _calculateProfits } = require('../services/state')
-const { marketBuy, marketSell, getBalances, getPrice, getQuantity, getFees } = require('../services/exchange')
+const { marketBuy, marketSell, getBalances, getPrice, getQuantity, getFees, getMinBuy } = require('../services/exchange')
 const { updateIntent } = require('../services/ledger')
 
 // Estado mutable del kill-switch (persistido en store para sobrevivir reinicios)
@@ -53,7 +53,7 @@ function getToSold(price, changeStatus) {
         if (isStopLossHit) {
             if (changeStatus) {
                 order.sold_price = price
-                order.status = 'selling'
+                if (order.status !== 'BELOW_NOTIONAL') order.status = 'selling'
             }
             toSold.push(order)
             continue
@@ -71,7 +71,7 @@ function getToSold(price, changeStatus) {
                 if (retrace >= TRAILING_TP_PERCENT) {
                     if (changeStatus) {
                         order.sold_price = price
-                        order.status = 'selling'
+                        if (order.status !== 'BELOW_NOTIONAL') order.status = 'selling'
                     }
                     toSold.push(order)
                 }
@@ -79,7 +79,7 @@ function getToSold(price, changeStatus) {
                 // Modo clasico: venta estatica
                 if (changeStatus) {
                     order.sold_price = price
-                    order.status = 'selling'
+                    if (order.status !== 'BELOW_NOTIONAL') order.status = 'selling'
                 }
                 toSold.push(order)
             }
@@ -156,6 +156,16 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             order.amount = res.executedQty - res.fills[0].commission
             store.put('fees', parseFloat(store.get('fees')) + order.buy_fee)
             order.buy_price = parseFloat(res.fills[0].price)
+            
+            const dynamicSellPercent = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
+            const targetNetPercent = dynamicSellPercent / 100
+            const netMultiplier = (1 + targetNetPercent) / ((1 - FEE_RATE) * (1 - FEE_RATE))
+            order.sell_price = order.buy_price * netMultiplier
+            
+            if (order.sell_price <= order.buy_price) {
+                logColor(colors.red, `[CRITICAL] Error de cálculo: Sell price (${order.sell_price}) <= Buy price (${order.buy_price}). Orden no persistida en el Grid.`)
+                return
+            }
 
             activeOrders.push(order)
             store.put('start_price', order.buy_price)
@@ -179,6 +189,26 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
 
 async function _sell(price, updateBalancesFn, notifyFn) {
     const orders = store.get('orders')
+    
+    // --- DESFIBRILADOR DE ÓRDENES (Recuperación de BELOW_NOTIONAL) ---
+    let recoveredZombies = false
+    const minNotional = await getMinBuy()
+    
+    for (let i = 0; i < orders.length; i++) {
+        if (orders[i].status === 'BELOW_NOTIONAL') {
+            const notionalValue = parseFloat(orders[i].amount) * price
+            if (notionalValue >= minNotional) {
+                orders[i].status = 'bought'
+                recoveredZombies = true
+            }
+        }
+    }
+    
+    if (recoveredZombies) {
+        store.put('orders', orders)
+    }
+    // ------------------------------------------------------------------
+
     const toSold = getToSold(price, true)
 
     if (toSold.length > 0) {
@@ -215,6 +245,21 @@ async function _sell(price, updateBalancesFn, notifyFn) {
             if (parseFloat(lotQuantity) <= 0) {
                 logColor(colors.red, '[ADVERTENCIA] Cantidad a vender por debajo del tamanho de lote permitido.')
                 return false
+            }
+
+            const notionalValue = parseFloat(lotQuantity) * price
+            
+            if (notionalValue < minNotional) {
+                const hasNewOrders = toSold.some(o => o.status !== 'BELOW_NOTIONAL')
+                if (hasNewOrders) {
+                    logColor(colors.yellow, `[NOTIONAL] Orden por debajo del mínimo de Binance (${minNotional} USDT). Valor a vender: $${notionalValue.toFixed(4)} USDT. Esperando que el balance crezca...`)
+                    toSold.forEach(o => { o.status = 'BELOW_NOTIONAL' })
+                    store.put('orders', orders)
+                }
+                return false
+            } else {
+                toSold.forEach(o => { o.status = 'selling' })
+                store.put('orders', orders)
             }
 
             const res = await marketSell(lotQuantity)

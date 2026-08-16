@@ -29,7 +29,11 @@ function createStubClient() {
         cancelOrder: async () => ({ status: 'CANCELED' }),
         cancelOpenOrders: async () => ({}) ,
         allOrders: async () => [],
-        exchangeInfo: async () => ({ symbols: [] }),
+        exchangeInfo: async () => ({
+            symbols: [{
+                filters: [{ filterType: 'NOTIONAL', minNotional: '5.00' }]
+            }]
+        }),
         withdraw: async () => ({ status: 'success' }),
         getKlines: async (symbol, interval, limit) => {
             // Mock velas para el stub
