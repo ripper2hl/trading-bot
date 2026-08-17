@@ -250,23 +250,30 @@ const getPriceTick = async (symbol) => {
 }
 
 const getQuantity = async (amount) => {
-    if (amount === undefined || amount === null || isNaN(parseFloat(amount))) {
+    let dAmount;
+    try {
+        dAmount = new Decimal(amount)
+        if (!dAmount.isFinite() || dAmount.lessThanOrEqualTo(0)) throw new Error()
+    } catch (e) {
         throw new Error(`[RISK] Cantidad inválida para getQuantity: ${amount}`)
     }
+
     const { symbols } = await client.exchangeInfo({ symbol: MARKET })
     const { stepSize } = symbols[0].filters.find(filter => filter.filterType === 'LOT_SIZE')
-    if (stepSize === undefined || stepSize === null || isNaN(parseFloat(stepSize))) {
+
+    let dStepSize;
+    try {
+        dStepSize = new Decimal(stepSize)
+        if (!dStepSize.isFinite() || dStepSize.lessThanOrEqualTo(0)) throw new Error()
+    } catch (e) {
         throw new Error(`[RISK] stepSize inválido obtenido de Binance: ${stepSize}`)
     }
-    const precision = symbols[0].baseAssetPrecision
 
-    const dAmount = new Decimal(amount)
-    const dStepSize = new Decimal(stepSize)
+    const precision = symbols[0].baseAssetPrecision
 
     const steps = dAmount.dividedBy(dStepSize).floor()
     const safeQuantity = steps.times(dStepSize)
 
-    // TODO: DECIMAL_BRIDGE (Binance order payload expects formatted string to precision)
     return safeQuantity.toFixed(precision, Decimal.ROUND_DOWN)
 }
 
@@ -279,26 +286,35 @@ async function getMinBuy() {
 }
 
 async function getFees({ commission, commissionAsset }) {
-    // TODO: DECIMAL_BRIDGE (tradingEngine expects Number for fee sum)
-    if (commission === undefined || commission === null || isNaN(parseFloat(commission))) {
+    let dCommission;
+    try {
+        dCommission = new Decimal(commission)
+        if (!dCommission.isFinite()) throw new Error()
+    } catch (e) {
         throw new Error(`[RISK] Comisión inválida para cálculo de fees: ${commission}`)
     }
-    const dCommission = new Decimal(commission)
-    if (commissionAsset === MARKET2) return dCommission.toNumber()
+
+    if (commissionAsset === MARKET2) return dCommission
+
     if (commissionAsset === 'BNB') {
         const pair = MARKET2 ? `BNB${MARKET2}` : 'BNBUSDT'
         const bnbPrice = await getPrice(pair) // already converted to number downstream
-        if (bnbPrice && !isNaN(bnbPrice) && new Decimal(bnbPrice).greaterThan(0)) {
-            return dCommission.times(new Decimal(bnbPrice)).toNumber()
+        if (bnbPrice !== null && !isNaN(bnbPrice)) {
+            const dBnbPrice = new Decimal(bnbPrice)
+            if (dBnbPrice.greaterThan(0)) {
+                return dCommission.times(dBnbPrice)
+            }
         }
-        return dCommission.toNumber()
+        return dCommission
     }
+
     const price = await getPrice(MARKET)
     if (price === undefined || price === null || isNaN(price)) {
         throw new Error(`[RISK] Precio inválido para cálculo de fee en base asset: ${price}`)
     }
+
     const dPrice = new Decimal(price)
-    return dPrice.times(dCommission).toNumber()
+    return dCommission.times(dPrice)
 }
 
 async function withdraw(profits, price) {

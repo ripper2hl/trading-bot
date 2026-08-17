@@ -181,11 +181,14 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             sell_fee: 0,
         }
 
+        const dBuyOrderAmountLog = new Decimal(BUY_ORDER_AMOUNT)
+        const dAmountOutLog = dBuyOrderAmountLog.dividedBy(dPrice)
+
         log(`
             Buying ${MARKET1} (Target Net Profit: ${dynamicSellPercent.toFixed(2)}%)
             ==================
             amountIn: ${parseFloat(BUY_ORDER_AMOUNT).toFixed(2)} ${MARKET2}
-            amountOut: ${(BUY_ORDER_AMOUNT / price).toFixed(6)} ${MARKET1}
+            amountOut: ${dAmountOutLog.toNumber().toFixed(6)} ${MARKET1}
             Target Sell Price: ${dTargetSellPrice.toNumber().toFixed(4)} ${MARKET2}
         `)
 
@@ -195,7 +198,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             order.id = res.orderId
 
             // TODO: DECIMAL_BRIDGE (exchange fills API & local state store)
-            const dFee = new Decimal(await getFees(res.fills[0]))
+            const dFee = await getFees(res.fills[0])
             order.buy_fee = dFee.toNumber()
             order.amount = new Decimal(res.executedQty).minus(new Decimal(res.fills[0].commission)).toNumber()
 
@@ -255,7 +258,7 @@ async function _sell(price, updateBalancesFn, notifyFn) {
         if (orders[i].status === 'BELOW_NOTIONAL') {
             const dOrderAmount = new Decimal(orders[i].amount || 0)
             const notionalValue = dOrderAmount.times(new Decimal(price))
-            if (notionalValue.greaterThanOrEqualTo(minNotional)) {
+            if (notionalValue.greaterThanOrEqualTo(new Decimal(minNotional))) {
                 orders[i].status = 'bought'
                 recoveredZombies = true
             }
@@ -293,9 +296,6 @@ async function _sell(price, updateBalancesFn, notifyFn) {
         }
 
         if (amountToSell.greaterThan(0)) {
-            // TODO: DECIMAL_BRIDGE (downstream methods expect Number primitives for now)
-            const numAmountToSell = amountToSell.toNumber()
-
             log(`
                 Selling ${MARKET1}
                 =================
@@ -303,7 +303,7 @@ async function _sell(price, updateBalancesFn, notifyFn) {
                 amountOut: ${amountToSell.times(new Decimal(price)).toNumber().toFixed(2)} ${MARKET2}
             `)
 
-            const lotQuantity = await getQuantity(numAmountToSell)
+            const lotQuantity = await getQuantity(amountToSell)
             const dLotQuantity = new Decimal(lotQuantity || 0)
             if (dLotQuantity.lessThanOrEqualTo(0)) {
                 logColor(colors.red, '[ADVERTENCIA] Cantidad a vender por debajo del tamanho de lote permitido.')
@@ -342,7 +342,7 @@ async function _sell(price, updateBalancesFn, notifyFn) {
                             if (sellableAmount.greaterThanOrEqualTo(orderAmount)) {
                                 const grossProfit = orderAmount.times(_price).minus(orderAmount.times(new Decimal(toSold[j].buy_price)))
 
-                                const dSellFee = new Decimal(await getFees(res.fills[0]))
+                                const dSellFee = await getFees(res.fills[0])
                                 toSold[j].sell_fee = dSellFee.toNumber() // TODO: DECIMAL_BRIDGE (saving to local store)
 
                                 const dBuyFee = new Decimal(toSold[j].buy_fee || 0)
@@ -375,7 +375,7 @@ async function _sell(price, updateBalancesFn, notifyFn) {
 
                 logColor(colors.red, '=============================')
                 logColor(colors.red,
-                    `Sold ${numAmountToSell.toFixed(6)} ${MARKET1} for ${amountToSell.times(_price).toNumber().toFixed(2)} ${MARKET2}, Price: ${finalNumPrice}\n`)
+                    `Sold ${amountToSell.toNumber().toFixed(6)} ${MARKET1} for ${amountToSell.times(_price).toNumber().toFixed(2)} ${MARKET2}, Price: ${finalNumPrice}\n`)
                 logColor(colors.red, '=============================')
 
                 _calculateProfits()
