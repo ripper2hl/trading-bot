@@ -72,6 +72,10 @@ Todas las variables se configuran en `.env`. El archivo `.env.example` contiene 
 | `TAKE_PROFIT_PERCENT` | `5` | % de ganancia global para cerrar |
 | `MAX_POSITION_PERCENT` | `5` | % máximo del balance en órdenes abiertas |
 | `DRAWDOWN_KILL_PERCENT` | `10` | % de drawdown para activar kill-switch |
+| `MAX_CAPITAL_USDT` | `0` | Capital máximo en USDT a exponer (0 = desc.) |
+| `MAX_BTC_INVENTORY` | `0` | Inventario máximo en BTC a poseer (0 = desc.) |
+| `MAX_DAILY_LOSS_PERCENT` | `0` | Pérdida máxima diaria permitida (0 = desc.) |
+| `RISK_DAY_TIMEZONE` | `America/Monterrey` | Zona horaria para corte diario de pérdida |
 
 #### Trailing Take-Profit
 
