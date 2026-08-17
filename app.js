@@ -6,7 +6,7 @@
 const fs = require('fs')
 const path = require('path')
 const {
-    MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
+    MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT, RESUME,
     BUY_PERCENT, SELL_PERCENT, STOP_LOSS_PERCENT, TAKE_PROFIT_PERCENT,
     DRY_RUN, DRAWDOWN_KILL_PERCENT, TRAILING_TP_PERCENT, POLL_INTERVAL_MS,
     NOTIFY_TELEGRAM_ENABLED, NOTIFY_TELEGRAM_ON,
@@ -429,7 +429,7 @@ async function init() {
         return
     }
 
-    if (process.argv[5] !== 'resume') {
+    if (!RESUME) {
         log('Iniciando bot...')
         if (SELL_ALL_ON_START)
             await clearStart(_closeBot)

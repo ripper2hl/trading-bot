@@ -18,5 +18,4 @@ COPY . .
 # Crear carpetas de volumen por defecto por si no se montan
 RUN mkdir -p data logs
 
-# Comando por defecto (puede ser sobreescrito al correr el contenedor)
-CMD ["node", "app.js", "BTC", "USDT", "15"]
+CMD ["node", "app.js"]

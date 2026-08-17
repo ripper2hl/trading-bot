@@ -14,11 +14,12 @@ const BINANCE_API_SECRET = process.env.BINANCE_API_SECRET || ''
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || ''
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || ''
 
-// ─── MERCADO (CLI) ──────────────────────────────────────────────
-const MARKET1 = process.argv[2]
-const MARKET2 = process.argv[3]
+// ─── MERCADO (CLI / ENV) ────────────────────────────────────────
+const MARKET1 = process.argv[2] || process.env.MARKET1
+const MARKET2 = process.argv[3] || process.env.MARKET2
 const MARKET = MARKET1 && MARKET2 ? MARKET1 + MARKET2 : null
-const BUY_ORDER_AMOUNT = process.argv[4]
+const BUY_ORDER_AMOUNT = process.argv[4] || process.env.BUY_ORDER_AMOUNT
+const RESUME = process.argv[5] === 'resume' || process.env.RESUME === 'true'
 
 // ─── HELPERS ────────────────────────────────────────────────────
 
@@ -148,6 +149,7 @@ module.exports = {
     MARKET2,
     MARKET,
     BUY_ORDER_AMOUNT,
+    RESUME,
     // Parámetros de trading
     BUY_PERCENT,
     SELL_PERCENT,
