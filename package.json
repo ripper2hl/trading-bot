@@ -4,7 +4,7 @@
   "description": "",
   "main": "app.js",
   "scripts": {
-    "test": "TEST_MODE=true node tests/bootstrap-validation.test.js && TEST_MODE=true node tests/critical-financial-regression.test.js && TEST_MODE=true node tests/production-critical-tests.test.js && TEST_MODE=true node tests/telegram-notify.test.js && TEST_MODE=true node tests/chaos-recovery.test.js && TEST_MODE=true node tests/sqlite-state-reconstruction.test.js && TEST_MODE=true node tests/sqlite-zombie-prevention.test.js && TEST_MODE=true node tests/peak-equity-and-stale-price.test.js && TEST_MODE=true node tests/atr-calculation.test.js && TEST_MODE=true node tests/atr-network-failure.test.js",
+    "test": "TEST_MODE=true node tests/bootstrap-validation.test.js && TEST_MODE=true node tests/critical-financial-regression.test.js && TEST_MODE=true node tests/production-critical-tests.test.js && TEST_MODE=true node tests/telegram-notify.test.js && TEST_MODE=true node tests/chaos-recovery.test.js && TEST_MODE=true node tests/sqlite-state-reconstruction.test.js && TEST_MODE=true node tests/sqlite-zombie-prevention.test.js && TEST_MODE=true node tests/peak-equity-and-stale-price.test.js && TEST_MODE=true node tests/atr-calculation.test.js && TEST_MODE=true node tests/atr-network-failure.test.js && node tests/mutex.test.js",
     "start": "node app.js"
   },
   "author": "MetaDapp",
@@ -19,6 +19,10 @@
     "node-storage": "0.0.9",
     "urlencode": "^1.1.0",
     "uuid": "^8.3.2",
-    "web3": "^1.7.0"
+    "web3": "^1.7.0",
+    "ws": "^8.21.3"
+  },
+  "devDependencies": {
+    "proxyquire": "^2.1.3"
   }
 }

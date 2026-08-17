@@ -25,10 +25,11 @@ const {
     getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances, resolveInitialBaseline
 } = require('./services/state')
 const {
-    getBalances, getPrice, getPriceTick, getMinBuy, clearStart, _sellAll, withdraw, getKlines
+    getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw, getKlines
 } = require('./services/exchange')
 const { getPendingIntents, updateIntent, reconstructStoreFromSQLite, db } = require('./services/ledger')
 const { acquirePidLock } = require('./services/pidLock')
+const { initWebSocket, getLivePrice, closeWebSocket } = require('./services/websocket')
 const {
     _buy, _sell, getToSold, setDrawdownKilled, isDrawdownKilled
 } = require('./controllers/tradingEngine')
@@ -137,9 +138,13 @@ async function updateDynamicGrid(currentPrice) {
     }
 }
 
+let isProcessingTick = false
+
 // === BUCLE PRINCIPAL ===
 
 async function broadcast() {
+    initWebSocket(MARKET, USE_TESTNET)
+
     while (true) {
         try {
             const haltFilePath = path.join(__dirname, 'data', `${MARKET1}${MARKET2}.HALT`)
@@ -150,36 +155,34 @@ async function broadcast() {
                 continue
             }
 
+            const marketPrice = getLivePrice()
+            if (!marketPrice) {
+                // Silencioso si el WS apenas está conectando
+                await sleep(100)
+                continue
+            }
+
+            if (isProcessingTick) {
+                await sleep(50)
+                continue
+            }
+            isProcessingTick = true
+
             try {
-                await reconcileBalances(getBalances, 1)
-            } catch (balanceErr) {
-                logColor(colors.red, `[CRITICAL] Reconciliacion de saldos fallida: ${balanceErr.message || balanceErr}`)
-                _notifyTelegram(null, 'risk')
-                await emergencyCleanUp()
-                process.exit(1)
-            }
-
-            const tick = await getPriceTick(MARKET)
-            if (!tick || !tick.price) {
-                logColor(colors.yellow, '[WARN] No se pudo obtener el precio del mercado. Omitiendo ciclo.')
-                await sleep(POLL_INTERVAL_MS)
-                continue
-            }
-
-            // Circuit Breaker de Alta Latencia (High Latency)
-            if (tick.latency > 3000) {
-                logColor(colors.yellow, `[HIGH LATENCY] Latencia de red excesiva con Binance (${tick.latency}ms > 3000ms). Omitiendo ciclo.`)
-                await sleep(POLL_INTERVAL_MS)
-                continue
-            }
+                try {
+                    await reconcileBalances(getBalances, 1)
+                } catch (balanceErr) {
+                    logColor(colors.red, `[CRITICAL] Reconciliacion de saldos fallida: ${balanceErr.message || balanceErr}`)
+                    _notifyTelegram(null, 'risk')
+                    await emergencyCleanUp()
+                    process.exit(1)
+                }
 
             const now = Date.now()
             if (now - lastATRUpdate > 15 * 60 * 1000) {
-                await updateDynamicGrid(tick ? tick.price : 0)
+                await updateDynamicGrid(marketPrice)
                 lastATRUpdate = now
             }
-
-            const marketPrice = tick.price
             const startPrice = store.get('start_price')
             
             const dynBuy = parseFloat(store.get('dynamic_buy_percent')) || BUY_PERCENT
@@ -316,6 +319,9 @@ async function broadcast() {
 
                     console.log('==========================')
                 }
+            } finally {
+                isProcessingTick = false
+            }
         } catch (err) {
             logColor(colors.red, `[ERROR BROADCAST] Error en el ciclo del bot: ${err.message || err}`)
             try {
@@ -587,6 +593,9 @@ async function cleanupOnFatal() {
     } catch (cleanupErr) {
         // Error ya logurado por emergencyCleanUp o por timeout — continuar
     }
+    
+    // Cerramos el WebSocket de forma limpia
+    closeWebSocket()
 }
 
 process.on('uncaughtException', async (error) => {
@@ -636,6 +645,7 @@ if (require.main === module) {
 module.exports = {
     recoverPendingIntent,
     init,
+    broadcast,
     calculateATR,
     updateDynamicGrid,
 }
