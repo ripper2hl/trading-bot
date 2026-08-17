@@ -125,7 +125,7 @@ async function updateDynamicGrid(currentPrice) {
                 return
             }
 
-            const MIN_GRID_PERCENT = 0.2
+            const MIN_GRID_PERCENT = 0.8
             const MAX_GRID_PERCENT = 5.0
             percent = Math.max(MIN_GRID_PERCENT, Math.min(MAX_GRID_PERCENT, percent))
             
