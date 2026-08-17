@@ -138,6 +138,19 @@ function getTradingDrawdown(price, providedPeak) {
     return ((equityCurve - peak) / peak) * 100
 }
 
+function getLiquidationValue(price) {
+    const T_init = parseFloat(store.get('initial_liquidation_value')) || resolveInitialBaseline(MARKET2, price)
+    
+    const currentQuote = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
+    const currentBase = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
+    const T_curr = currentQuote + (currentBase * price)
+    
+    const pnl = T_curr - T_init
+    const percent = T_init > 0 ? (pnl / T_init) * 100 : 0
+    
+    return { initial: T_init, current: T_curr, pnl, percent }
+}
+
 function _logProfits(price) {
     const profits = parseFloat(store.get('profits'))
     var isGainerProfit = profits > 0 ? 1 : profits < 0 ? 2 : 0
@@ -146,6 +159,11 @@ function _logProfits(price) {
         colors.green : isGainerProfit == 2 ?
             colors.red : colors.gray,
         `Grid Profits (Incl. fees): ${parseFloat(store.get('profits')).toFixed(4)} ${MARKET2}`)
+
+    const liq = getLiquidationValue(price)
+    const isGainerLiq = liq.pnl > 0 ? 1 : liq.pnl < 0 ? 2 : 0
+    logColor(isGainerLiq == 1 ? colors.green : isGainerLiq == 2 ? colors.red : colors.gray,
+        `Liquidation Value: ${liq.current.toFixed(2)} ${MARKET2} (vs ${liq.initial.toFixed(2)} ${MARKET2}) ==> PnL: ${liq.pnl >= 0 ? '+' : ''}${liq.pnl.toFixed(2)} ${MARKET2} (${liq.percent >= 0 ? '+' : ''}${liq.percent.toFixed(2)}%)`)
 
     const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
     const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
@@ -161,6 +179,9 @@ function _logProfits(price) {
         `Current Equity: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2}`)
     logColor(colors.gray,
         `Equity Curve: ${equityCurve.toFixed(2)} ${MARKET2}, Peak Curve: ${peakCurve.toFixed(2)} ${MARKET2}, Trading Drawdown: ${tradingDD.toFixed(2)}%`)
+    
+    logColor(colors.gray,
+        `Historial: ${parseInt(store.get('total_buys')) || 0} compras | ${parseInt(store.get('total_sells')) || 0} ventas | ${parseInt(store.get('completed_cycles')) || 0} ciclos completos`)
 }
 
 async function reconcileBalances(getBalances, tolerancePercent = 1) {
@@ -210,20 +231,29 @@ function _closeBot() {
     }
 }
 
-function resolveInitialBaseline(market2 = MARKET2) {
+function resolveInitialBaseline(market2 = MARKET2, fallbackPrice = 0) {
     const existing = store.get('strategy_baseline_equity')
+    let baseline = 0
     if (existing !== undefined && existing !== null) {
-        return parseFloat(existing)
+        baseline = parseFloat(existing)
+    } else {
+        const quoteKey = `initial_${market2.toLowerCase()}_balance`
+        const fallbackQuoteKey = `${market2.toLowerCase()}_balance`
+        baseline = parseFloat(store.get(quoteKey)) || parseFloat(store.get(fallbackQuoteKey)) || 0
+        store.put('strategy_baseline_equity', baseline)
     }
-    const quoteKey = `initial_${market2.toLowerCase()}_balance`
-    const fallbackQuoteKey = `${market2.toLowerCase()}_balance`
-    const baseline = parseFloat(store.get(quoteKey)) || parseFloat(store.get(fallbackQuoteKey)) || 0
-    store.put('strategy_baseline_equity', baseline)
 
     const existingPeak = store.get('peak_equity_curve')
     if (existingPeak === undefined || existingPeak === null) {
         store.put('peak_equity_curve', baseline)
     }
+    
+    const liqValue = store.get('initial_liquidation_value')
+    if (liqValue === undefined || liqValue === null) {
+        const base = parseFloat(store.get(`initial_${MARKET1.toLowerCase()}_balance`)) || 0
+        store.put('initial_liquidation_value', baseline + (base * fallbackPrice))
+    }
+    
     return baseline
 }
 
@@ -242,6 +272,7 @@ module.exports = {
     updatePeakEquityCurve,
     getTradingDrawdown,
     _logProfits,
+    getLiquidationValue,
     reconcileBalances,
     resolveInitialBaseline,
     _closeBot,

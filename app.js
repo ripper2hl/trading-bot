@@ -501,8 +501,7 @@ async function init() {
         if (store.get(`initial_${MARKET2.toLowerCase()}_balance`) === undefined) {
             store.put(`initial_${MARKET2.toLowerCase()}_balance`, store.get(`${MARKET2.toLowerCase()}_balance`))
         }
-
-        resolveInitialBaseline(MARKET2)
+        // resolveInitialBaseline se llama al final de init() para ambos flujos
     } else {
         if (SELL_ALL_ON_START) {
             logColor(colors.yellow, '[BOOTSTRAP WARN] SELL_ALL_ON_START está activado en config pero se ignorará por estar en modo RESUME.')
@@ -517,11 +516,14 @@ async function init() {
             reconstructStoreFromSQLite({ symbol: MARKET, store, currentPrice, balances })
         }
 
-        resolveInitialBaseline(MARKET2)
     }
 
     // Fetch inicial de ATR antes del log de auditoria
     const currentPrice = await getPrice(MARKET)
+    
+    // Resolvemos el baseline pasándole el currentPrice para el caso RESUME
+    resolveInitialBaseline(MARKET2, currentPrice)
+    
     await updateDynamicGrid(currentPrice)
 
     const envStr = USE_TESTNET ? 'TESTNET' : 'MAINNET'
@@ -532,6 +534,7 @@ async function init() {
     const dynBuyStr = `${(parseFloat(store.get('dynamic_buy_percent')) || BUY_PERCENT).toFixed(2)}%`
     const dynSellStr = `${(parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT).toFixed(2)}%`
     const atrStr = `$${currentATR.toFixed(2)}`
+    const histStr = `${parseInt(store.get('total_buys')) || 0} compras | ${parseInt(store.get('total_sells')) || 0} ventas | ${parseInt(store.get('completed_cycles')) || 0} ciclos`
 
     console.log(`
 +--------------------------------------------------------+
@@ -542,6 +545,7 @@ async function init() {
 | WITHDRAW_PROFITS_ENABLE: ${withdrawStr.padEnd(29)} |
 | Initial Baseline Equity: ${baselineStr.padEnd(29)} |
 | Open Orders Activas:     ${String(openOrdersCount).padEnd(29)} |
+| Historial Operativo:     ${histStr.padEnd(29)} |
 | ATR 15m (Volatility):    ${atrStr.padEnd(29)} |
 | Dynamic Grid Buy:        ${dynBuyStr.padEnd(29)} |
 | Dynamic Grid Sell:       ${dynSellStr.padEnd(29)} |

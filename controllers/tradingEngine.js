@@ -170,6 +170,8 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             activeOrders.push(order)
             store.put('start_price', order.buy_price)
             await updateBalancesFn()
+            
+            store.put('total_buys', (parseInt(store.get('total_buys')) || 0) + 1)
 
             logColor(colors.green, '=============================')
             logColor(colors.green, `Bought ${order.amount} ${MARKET1} for ${parseFloat(BUY_ORDER_AMOUNT).toFixed(2)} ${MARKET2}, Price: ${order.buy_price}\n`)
@@ -295,6 +297,8 @@ async function _sell(price, updateBalancesFn, notifyFn) {
                 store.put('start_price', _price)
                 await updateBalancesFn()
 
+                store.put('total_sells', (parseInt(store.get('total_sells')) || 0) + 1)
+
                 logColor(colors.red, '=============================')
                 logColor(colors.red,
                     `Sold ${amountToSell.toFixed(6)} ${MARKET1} for ${parseFloat(amountToSell * _price).toFixed(2)} ${MARKET2}, Price: ${_price}\n`)
@@ -308,6 +312,7 @@ async function _sell(price, updateBalancesFn, notifyFn) {
                         if (orders[i].id) {
                             updateIntent(orders[i].id, 'CLOSED')
                         }
+                        store.put('completed_cycles', (parseInt(store.get('completed_cycles')) || 0) + 1)
                         orders.splice(i, 1)
                     }
                 }
