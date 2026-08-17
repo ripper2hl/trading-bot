@@ -4,6 +4,7 @@
  * Encapsula ordenes, consultas de precio, saldos y cantidades.
  */
 const client = require('./binance')
+const Decimal = require('../utils/decimal')
 const {
     MARKET, MARKET1, MARKET2, DRY_RUN, FEE_RATE,
     DEFAULT_WITHDRAW_NETWORK, WITHDRAW_ADDRESS_BUSD, WITHDRAW_ADDRESS_USDT, POLL_INTERVAL_MS
@@ -72,15 +73,21 @@ async function marketOrder(side, amount, quoted) {
         // Actualizar saldos locales simulados para mantener coherencia del grid
         const m1Key = `${MARKET1.toLowerCase()}_balance`
         const m2Key = `${MARKET2.toLowerCase()}_balance`
-        const curM1 = parseFloat(store.get(m1Key)) || 0
-        const curM2 = parseFloat(store.get(m2Key)) || 0
+
+        const curM1 = new Decimal(store.get(m1Key) || 0)
+        const curM2 = new Decimal(store.get(m2Key) || 0)
+        const dSimQty = new Decimal(simQty)
+        const dSimCommission = new Decimal(simCommission)
+        const dSimPrice = new Decimal(simPrice)
 
         if (side === 'BUY') {
-            store.put(m1Key, curM1 + simQty - simCommission)
-            store.put(m2Key, curM2 - (simQty * simPrice))
+            // TODO: DECIMAL_BRIDGE (state.js store balances require Number right now)
+            store.put(m1Key, curM1.plus(dSimQty).minus(dSimCommission).toNumber())
+            store.put(m2Key, curM2.minus(dSimQty.times(dSimPrice)).toNumber())
         } else {
-            store.put(m1Key, curM1 - simQty)
-            store.put(m2Key, curM2 + (simQty * simPrice) - simCommission)
+            // TODO: DECIMAL_BRIDGE (state.js store balances require Number right now)
+            store.put(m1Key, curM1.minus(dSimQty).toNumber())
+            store.put(m2Key, curM2.plus(dSimQty.times(dSimPrice)).minus(dSimCommission).toNumber())
         }
 
         logTrade(`DRY_RUN_${side}`, { symbol: MARKET, quantity: simQty, price: simPrice, orderId: simResult.orderId, fee: simCommission })
@@ -93,7 +100,9 @@ async function marketOrder(side, amount, quoted) {
         const res = await withBackoff(() => client.order(orderObject))
 
         if (res && res.status === 'PARTIALLY_FILLED') {
-            const partialPrice = res.fills && res.fills[0] ? parseFloat(res.fills[0].price) : null
+            // TODO: DECIMAL_BRIDGE (usado para logs o recovery expecting number/null)
+            const partialPrice = res.fills && res.fills[0] ? new Decimal(res.fills[0].price).toNumber() : null
+
             logColor(colors.red, `[RISK] Partial Fill detectado en ${MARKET} (${side}). Orden ${res.orderId} parcialmente ejecutada. Se cancela el remanente y se detiene la ejecución.`)
             try {
                 await client.cancelOrder({ symbol: MARKET, orderId: res.orderId })
@@ -132,9 +141,11 @@ async function marketOrder(side, amount, quoted) {
         }
 
         if (res && res.status === 'FILLED') {
-            const executedPrice = res.fills && res.fills.length > 0 ? parseFloat(res.fills[0].price) : null
-            const executedFee = res.fills && res.fills.length > 0 ? parseFloat(res.fills[0].commission) : null
+            // TODO: DECIMAL_BRIDGE (intent db expect number/null)
+            const executedPrice = res.fills && res.fills.length > 0 ? new Decimal(res.fills[0].price).toNumber() : null
+            const executedFee = res.fills && res.fills.length > 0 ? new Decimal(res.fills[0].commission).toNumber() : null
             const commissionAsset = res.fills && res.fills.length > 0 ? res.fills[0].commissionAsset : null
+
             updateIntent(orderObject.newClientOrderId, 'CONFIRMED', executedPrice, executedFee, res.executedQty, commissionAsset, res.orderId)
             logTrade(side, {
                 symbol: MARKET,
@@ -184,7 +195,8 @@ const getBalances = async () => {
         var parsedBalances = {}
         assets.forEach(asset => {
             const found = _balances.find(coin => coin.asset === asset)
-            parsedBalances[asset] = found ? parseFloat(found.free) : 0
+            // TODO: DECIMAL_BRIDGE (state.js expects number map from this function right now)
+            parsedBalances[asset] = found ? new Decimal(found.free).toNumber() : 0
         })
         return parsedBalances
     } catch (err) {
@@ -201,7 +213,9 @@ const getPrice = async (symbol) => {
     try {
         const prices = await withBackoff(() => client.prices({ symbol }))
         if (prices && prices[symbol]) {
-            return parseFloat(prices[symbol])
+            if (isNaN(parseFloat(prices[symbol]))) return NaN
+            // TODO: DECIMAL_BRIDGE (all downstream tradingEngine expects a Number right now)
+            return new Decimal(prices[symbol]).toNumber()
         }
         return null
     } catch (err) {
@@ -220,8 +234,10 @@ const getPriceTick = async (symbol) => {
         const prices = await withBackoff(() => client.prices({ symbol }))
         const fetchLatency = Date.now() - startTime
         if (prices && prices[symbol]) {
+            if (isNaN(parseFloat(prices[symbol]))) return { price: NaN, timestamp: startTime, latency: fetchLatency }
             return {
-                price: parseFloat(prices[symbol]),
+                // TODO: DECIMAL_BRIDGE (downstream expects number)
+                price: new Decimal(prices[symbol]).toNumber(),
                 timestamp: startTime,
                 latency: fetchLatency
             }
@@ -234,31 +250,55 @@ const getPriceTick = async (symbol) => {
 }
 
 const getQuantity = async (amount) => {
+    if (amount === undefined || amount === null || isNaN(parseFloat(amount))) {
+        throw new Error(`[RISK] Cantidad inválida para getQuantity: ${amount}`)
+    }
     const { symbols } = await client.exchangeInfo({ symbol: MARKET })
     const { stepSize } = symbols[0].filters.find(filter => filter.filterType === 'LOT_SIZE')
+    if (stepSize === undefined || stepSize === null || isNaN(parseFloat(stepSize))) {
+        throw new Error(`[RISK] stepSize inválido obtenido de Binance: ${stepSize}`)
+    }
     const precision = symbols[0].baseAssetPrecision
 
-    const steps = Math.floor(Number(amount) / Number(stepSize))
-    const safeQuantity = Number(steps * Number(stepSize))
-    return safeQuantity.toFixed(precision)
+    const dAmount = new Decimal(amount)
+    const dStepSize = new Decimal(stepSize)
+
+    const steps = dAmount.dividedBy(dStepSize).floor()
+    const safeQuantity = steps.times(dStepSize)
+
+    // TODO: DECIMAL_BRIDGE (Binance order payload expects formatted string to precision)
+    return safeQuantity.toFixed(precision, Decimal.ROUND_DOWN)
 }
 
 async function getMinBuy() {
     const { symbols } = await client.exchangeInfo({ symbol: MARKET })
     const { minNotional } = symbols[0].filters.find(filter => filter.filterType === 'NOTIONAL')
-    return parseFloat(minNotional)
+
+    // TODO: DECIMAL_BRIDGE (downstream clearStart expects Number)
+    return new Decimal(minNotional).toNumber()
 }
 
 async function getFees({ commission, commissionAsset }) {
-    if (commissionAsset === MARKET2) return commission
+    // TODO: DECIMAL_BRIDGE (tradingEngine expects Number for fee sum)
+    if (commission === undefined || commission === null || isNaN(parseFloat(commission))) {
+        throw new Error(`[RISK] Comisión inválida para cálculo de fees: ${commission}`)
+    }
+    const dCommission = new Decimal(commission)
+    if (commissionAsset === MARKET2) return dCommission.toNumber()
     if (commissionAsset === 'BNB') {
         const pair = MARKET2 ? `BNB${MARKET2}` : 'BNBUSDT'
-        const bnbPrice = await getPrice(pair)
-        if (bnbPrice && Number(bnbPrice) > 0) return Number(commission) * Number(bnbPrice)
-        return Number(commission)
+        const bnbPrice = await getPrice(pair) // already converted to number downstream
+        if (bnbPrice && !isNaN(bnbPrice) && new Decimal(bnbPrice).greaterThan(0)) {
+            return dCommission.times(new Decimal(bnbPrice)).toNumber()
+        }
+        return dCommission.toNumber()
     }
     const price = await getPrice(MARKET)
-    return price * commission
+    if (price === undefined || price === null || isNaN(price)) {
+        throw new Error(`[RISK] Precio inválido para cálculo de fee en base asset: ${price}`)
+    }
+    const dPrice = new Decimal(price)
+    return dPrice.times(dCommission).toNumber()
 }
 
 async function withdraw(profits, price) {
@@ -297,8 +337,25 @@ async function clearStart(closeBot) {
     const balances = await getBalances()
     const totalAmount = balances[MARKET1]
     const price = await getPrice(MARKET)
-    const minSell = (await getMinBuy()) / price
-    if (totalAmount >= parseFloat(minSell)) {
+
+    if (price === undefined || price === null || isNaN(price) || price <= 0) {
+        logColor(colors.red, `[ERROR clearStart] Precio inválido o cero: ${price}. Abortando sweep.`)
+        return logFail()
+    }
+    if (totalAmount === undefined || totalAmount === null || isNaN(totalAmount)) {
+        logColor(colors.red, `[ERROR clearStart] Balance inválido: ${totalAmount}. Abortando sweep.`)
+        return logFail()
+    }
+
+    const minBuy = await getMinBuy()
+    if (minBuy === undefined || minBuy === null || isNaN(minBuy)) {
+        logColor(colors.red, `[ERROR clearStart] MinBuy inválido: ${minBuy}. Abortando sweep.`)
+        return logFail()
+    }
+
+    const minSell = new Decimal(minBuy).dividedBy(new Decimal(price))
+
+    if (new Decimal(totalAmount).greaterThanOrEqualTo(minSell)) {
         try {
             const lotQuantity = await getQuantity(totalAmount)
             const res = await marketSell(lotQuantity)
@@ -322,9 +379,19 @@ async function _sellAll() {
     try {
         const balances = await getBalances()
         const totalAmount = balances[MARKET1]
+
+        if (totalAmount === undefined || totalAmount === null || isNaN(totalAmount)) {
+            logColor(colors.red, `[ERROR _sellAll] Balance inválido: ${totalAmount}. Abortando sweep.`)
+            return
+        }
+
         if (totalAmount > 0) {
             const lotQuantity = await getQuantity(totalAmount)
-            if (parseFloat(lotQuantity) > 0) {
+            if (lotQuantity === undefined || lotQuantity === null || isNaN(parseFloat(lotQuantity))) {
+                logColor(colors.red, `[ERROR _sellAll] lotQuantity inválido: ${lotQuantity}. Abortando sweep.`)
+                return
+            }
+            if (new Decimal(lotQuantity).greaterThan(0)) {
                 const res = await marketSell(lotQuantity)
                 if (res && res.status === 'FILLED') {
                     logColor(colors.green, 'Bot detenido correctamente: Todo vendido')

@@ -22,7 +22,7 @@ const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
     store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity,
-    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances, resolveInitialBaseline, checkDailyLoss
+    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, checkTradingDrawdown, _logProfits, _closeBot, reconcileBalances, resolveInitialBaseline, checkDailyLoss
 } = require('./services/state')
 const {
     getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw, getKlines
@@ -34,6 +34,7 @@ const {
     _buy, _sell, getToSold, setDrawdownKilled, isDrawdownKilled
 } = require('./controllers/tradingEngine')
 const moment = require('moment')
+const Decimal = require('./utils/decimal')
 
 // === NOTIFICACIONES ===
 
@@ -85,53 +86,61 @@ let currentATR = 0
 let lastATRUpdate = 0
 
 function calculateATR(klines) {
-    if (!klines || !Array.isArray(klines) || klines.length === 0) return 0
+    if (!klines || !Array.isArray(klines) || klines.length === 0) return new Decimal(0)
     let trs = []
     for (let i = 1; i < klines.length; i++) {
-        const high = parseFloat(klines[i].high)
-        const low = parseFloat(klines[i].low)
-        const prevClose = parseFloat(klines[i-1].close)
-        
-        if (isNaN(high) || isNaN(low) || isNaN(prevClose)) continue
+        let high, low, prevClose
+        try {
+            high = new Decimal(klines[i].high)
+            low = new Decimal(klines[i].low)
+            prevClose = new Decimal(klines[i-1].close)
+        } catch (e) {
+            continue
+        }
 
-        const tr1 = high - low
-        const tr2 = Math.abs(high - prevClose)
-        const tr3 = Math.abs(low - prevClose)
-        trs.push(Math.max(tr1, tr2, tr3))
+        if (!high.isFinite() || !low.isFinite() || !prevClose.isFinite()) continue
+
+        const tr1 = high.minus(low)
+        const tr2 = high.minus(prevClose).abs()
+        const tr3 = low.minus(prevClose).abs()
+        trs.push(Decimal.max(tr1, tr2, tr3))
     }
-    if (trs.length < 5) return 0
-    const sumTR = trs.reduce((acc, val) => acc + val, 0)
-    const atr = sumTR / trs.length
-    
-    return isNaN(atr) || !Number.isFinite(atr) ? 0 : atr
+    if (trs.length < 5) return new Decimal(0)
+    const sumTR = trs.reduce((acc, val) => acc.plus(val), new Decimal(0))
+    const atr = sumTR.dividedBy(trs.length)
+
+    return !atr.isFinite() ? new Decimal(0) : atr
 }
 
 async function updateDynamicGrid(currentPrice) {
     try {
         const klines = await getKlines(MARKET, '15m', 15)
         const atrValue = calculateATR(klines)
-        
-        if (atrValue <= 0 || !Number.isFinite(atrValue) || isNaN(atrValue)) {
-            logColor(colors.yellow, `[ATR WARN] Valor inválido o cero: ${atrValue}. Se mantiene el grid anterior.`)
+
+        if (atrValue.lessThanOrEqualTo(0) || !atrValue.isFinite()) {
+            logColor(colors.yellow, `[ATR WARN] Valor inválido o cero: ${atrValue.toNumber()}. Se mantiene el grid anterior.`)
             return
         }
-        
-        currentATR = atrValue
+
+        currentATR = atrValue.toNumber()
         if (currentPrice > 0) {
-            let percent = (currentATR / currentPrice) * 100 * MULTIPLICADOR_ATR
-            
-            if (isNaN(percent) || !Number.isFinite(percent) || percent <= 0) {
-                logColor(colors.yellow, `[ATR WARN] Cálculo de % inválido: ${percent}. Se mantiene el grid anterior.`)
+            const dCurrentPrice = new Decimal(currentPrice)
+            const dMultiplicadorATR = new Decimal(MULTIPLICADOR_ATR)
+
+            let percent = atrValue.dividedBy(dCurrentPrice).times(100).times(dMultiplicadorATR)
+
+            if (!percent.isFinite() || percent.lessThanOrEqualTo(0)) {
+                logColor(colors.yellow, `[ATR WARN] Cálculo de % inválido: ${percent.toNumber()}. Se mantiene el grid anterior.`)
                 return
             }
 
-            const MIN_GRID_PERCENT = 0.8
-            const MAX_GRID_PERCENT = 5.0
-            percent = Math.max(MIN_GRID_PERCENT, Math.min(MAX_GRID_PERCENT, percent))
-            
-            store.put('dynamic_buy_percent', percent)
-            store.put('dynamic_sell_percent', percent)
-            logColor(colors.cyan, `[ATR] Actualizado: ${currentATR.toFixed(2)} USD. Nuevo Grid Dinámico: ${percent.toFixed(3)}%`)
+            const MIN_GRID_PERCENT = new Decimal(0.8)
+            const MAX_GRID_PERCENT = new Decimal(5.0)
+            percent = Decimal.max(MIN_GRID_PERCENT, Decimal.min(MAX_GRID_PERCENT, percent))
+
+            store.put('dynamic_buy_percent', percent.toNumber())
+            store.put('dynamic_sell_percent', percent.toNumber())
+            logColor(colors.cyan, `[ATR] Actualizado: ${currentATR.toFixed(2)} USD. Nuevo Grid Dinámico: ${percent.toNumber().toFixed(3)}%`)
         }
     } catch (err) {
         logColor(colors.yellow, `[ATR WARN] No se pudo actualizar ATR: ${err.message || err}`)
@@ -200,7 +209,7 @@ async function broadcast() {
                 lastATRUpdate = now
             }
             const startPrice = store.get('start_price')
-            
+
             const dynBuy = parseFloat(store.get('dynamic_buy_percent')) || BUY_PERCENT
             const dynSell = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
 
@@ -217,17 +226,16 @@ async function broadcast() {
             const currentEquity = getCurrentEquity(marketPrice)
             const equityCurve = getTradingEquityCurve(marketPrice)
             const peakEquityCurve = updatePeakEquityCurve(marketPrice)
-            const tradingDDPercent = getTradingDrawdown(marketPrice, peakEquityCurve)
-            const absTradingDrawdown = Math.abs(tradingDDPercent)
 
-            if (absTradingDrawdown >= DRAWDOWN_KILL_PERCENT && !isDrawdownKilled()) {
+            const ddCheck = checkTradingDrawdown(marketPrice, peakEquityCurve)
+            if (ddCheck.exceeded && !isDrawdownKilled()) {
                 setDrawdownKilled(true)
                 logColor(colors.red, `[KILL-SWITCH] Peak Equity Curve: ${peakEquityCurve.toFixed(2)} ${MARKET2}, Equity Curve Actual: ${equityCurve.toFixed(2)} ${MARKET2}`)
-                logColor(colors.red, `[KILL-SWITCH] Trading Drawdown del ${absTradingDrawdown.toFixed(3)}% desde el máximo de la curva de equity supera el límite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
+                logColor(colors.red, `[KILL-SWITCH] Trading Drawdown del ${Math.abs(ddCheck.drawdown).toFixed(3)}% desde el máximo de la curva de equity supera el límite de ${ddCheck.limit}%. Deteniendo operaciones.`)
                 logColor(colors.red, '[KILL-SWITCH] Se requiere intervención manual para reanudar.')
                 _notifyTelegram(marketPrice, 'sell')
             }
-            
+
             const dailyCheck = checkDailyLoss(marketPrice)
             if (dailyCheck.exceeded && !isDrawdownKilled()) {
                 setDrawdownKilled(true)
@@ -292,7 +300,10 @@ async function broadcast() {
                         `New price: ${marketPrice} ${MARKET2} ==> -${parseFloat(percent).toFixed(3)}%`)
                     store.put('percent', `-${parseFloat(percent).toFixed(3)}`)
 
-                    if (percent >= dynBuy)
+                    const dPercent = new Decimal(percent)
+                    const dDynBuy = new Decimal(dynBuy)
+
+                    if (dPercent.greaterThanOrEqualTo(dDynBuy))
                         await _buy(marketPrice, BUY_ORDER_AMOUNT, updateBalances, _notifyTelegram)
                 } else {
                     const factor = (marketPrice - startPrice)
@@ -414,7 +425,7 @@ async function init() {
                     let fillPrice = parseFloat(order.price || 0)
                     let fillFee = 0
                     let commissionAsset = null
-                    
+
                     try {
                         const trades = await client.myTrades({ symbol: MARKET, orderId: order.orderId })
                         if (trades && trades.length > 0) {
@@ -431,7 +442,7 @@ async function init() {
                     } catch (e) {
                         console.error(`[BOOTSTRAP WARN] No se pudo obtener myTrades para la orden ${order.orderId}: ${e.message}`)
                     }
-                    
+
                     updateIntent(intent.clientOrderId, 'CONFIRMED', fillPrice, fillFee, order.executedQty, commissionAsset, order.orderId)
                     intent.price = fillPrice
                     intent.fee = fillFee
@@ -528,10 +539,10 @@ async function init() {
 
     // Fetch inicial de ATR antes del log de auditoria
     const currentPrice = await getPrice(MARKET)
-    
+
     // Resolvemos el baseline pasándole el currentPrice para el caso RESUME
     resolveInitialBaseline(MARKET2, currentPrice)
-    
+
     await updateDynamicGrid(currentPrice)
 
     const envStr = USE_TESTNET ? 'TESTNET' : 'MAINNET'
@@ -644,7 +655,7 @@ async function cleanupOnFatal() {
     } catch (cleanupErr) {
         // Error ya logurado por emergencyCleanUp o por timeout — continuar
     }
-    
+
     // Cerramos el WebSocket de forma limpia
     closeWebSocket()
 }

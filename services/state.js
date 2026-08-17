@@ -6,13 +6,31 @@
 const Storage = require('node-storage')
 const moment = require('moment')
 const fs = require('fs')
+const Decimal = require('../utils/decimal')
 const {
     MARKET1, MARKET2, MARKET,
     BALANCE_ABSOLUTE_TOLERANCE_BASE,
     BALANCE_ABSOLUTE_TOLERANCE_QUOTE,
     MAX_DAILY_LOSS_PERCENT,
+    DRAWDOWN_KILL_PERCENT,
     RISK_DAY_TIMEZONE
 } = require('../config/constants')
+
+function ensureValidDecimal(value, name) {
+    if (value === undefined || value === null || value === '') {
+        throw new Error(`[FAIL-CLOSED] Valor faltante o vacío para ${name}`)
+    }
+    let d
+    try {
+        d = new Decimal(value)
+    } catch (e) {
+        throw new Error(`[FAIL-CLOSED] Fallo al instanciar Decimal para ${name}: ${value}`)
+    }
+    if (d.isNaN() || !d.isFinite()) {
+        throw new Error(`[FAIL-CLOSED] Valor no finito o NaN para ${name}: ${value}`)
+    }
+    return d
+}
 const { log, logColor, colors } = require('../utils/logger')
 
 const store = new Storage(`./data/${MARKET}.json`)
@@ -26,8 +44,10 @@ function elapsedTime() {
 
 function _newPriceReset(_market, balance, price) {
     const market = _market == 1 ? MARKET1 : MARKET2
-    if (!(parseFloat(store.get(`${market.toLowerCase()}_balance`)) > balance))
-        store.put('start_price', price)
+    const currentBalance = new Decimal(store.get(`${market.toLowerCase()}_balance`) || 0)
+    if (!currentBalance.greaterThan(balance)) {
+        store.put('start_price', price) // TODO: precio sigue entrando como number en otras partes, revisar despues
+    }
 }
 
 async function _updateBalances(getBalances) {
@@ -42,11 +62,12 @@ function _calculateProfits() {
 
     if (sold.length > 0) {
         const totalSoldProfits = sold
-            .map(order => order.profit)
-            .reduce((prev, next) => parseFloat(prev) + parseFloat(next), 0)
+            .map(order => new Decimal(order.profit || 0))
+            .reduce((prev, next) => prev.plus(next), new Decimal(0))
 
-        const currentProfits = parseFloat(store.get('profits') || 0)
-        store.put('profits', parseFloat((currentProfits + totalSoldProfits).toFixed(4)))
+        const currentProfits = new Decimal(store.get('profits') || 0)
+        // TODO: DECIMAL_BRIDGE
+        store.put('profits', currentProfits.plus(totalSoldProfits).toDecimalPlaces(4, Decimal.ROUND_HALF_EVEN).toNumber())
 
         // Purga permanente de ordenes vendidas del store para evitar doble conteo
         const remainingOrders = orders.filter(order => order && order.status !== 'sold')
@@ -55,126 +76,255 @@ function _calculateProfits() {
 }
 
 function getRealProfits(price) {
-    const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`))
-    const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`))
+    const m1Balance = new Decimal(store.get(`${MARKET1.toLowerCase()}_balance`) || 0)
+    const m2Balance = new Decimal(store.get(`${MARKET2.toLowerCase()}_balance`) || 0)
 
-    const initialBalance1 = parseFloat(store.get(`initial_${MARKET1.toLowerCase()}_balance`))
-    const initialBalance2 = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`))
+    const initialBalance1 = new Decimal(store.get(`initial_${MARKET1.toLowerCase()}_balance`) || 0)
+    const initialBalance2 = new Decimal(store.get(`initial_${MARKET2.toLowerCase()}_balance`) || 0)
 
-    return parseFloat(parseFloat((m1Balance - initialBalance1) * price + m2Balance) - initialBalance2).toFixed(4)
+    const dPrice = new Decimal(price || 0)
+
+    // ((m1Balance - initialBalance1) * price + m2Balance) - initialBalance2
+    const baseDiff = m1Balance.minus(initialBalance1)
+    const pnlBase = baseDiff.times(dPrice)
+    const totalWithM2 = pnlBase.plus(m2Balance)
+    const realProfits = totalWithM2.minus(initialBalance2)
+
+    // TODO: DECIMAL_BRIDGE (Retorna string formateado como hacia parseFloat(..).toFixed(4))
+    return realProfits.toDecimalPlaces(4, Decimal.ROUND_HALF_EVEN).toFixed(4)
 }
 
-/**
- * Calcula el equity base de referencia en unidades de MARKET2.
- * Formula: initial_USDT + (initial_BTC * precio_actual)
- *
- * Usa precio_actual (no congelado) a proposito: el numerador getRealProfits()
- * ya aisla el PnL de trading puro ((BTC_actual - BTC_inicial) * precio + USDT_actual - USDT_inicial),
- * asi que al dividir entre este denominador obtenemos el porcentaje de PnL
- * relativo al valor actual de la cartera, no al valor historico.
- * Esto evita que un movimiento grande de BTC distorsione los % de drawdown/TP/SL.
- *
- * Invariante: si no hay trades, getRealProfits() = 0, por lo que el % siempre es 0%
- * independientemente de cuanto cambie el precio — el BTC preexistente no genera PnL fantasma.
- */
 function getInitialEquity(price) {
-    const initialBalance1 = parseFloat(store.get(`initial_${MARKET1.toLowerCase()}_balance`)) || 0
-    const initialBalance2 = parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-    return initialBalance1 * price + initialBalance2
+    const initialBalance1 = new Decimal(store.get(`initial_${MARKET1.toLowerCase()}_balance`) || 0)
+    const initialBalance2 = new Decimal(store.get(`initial_${MARKET2.toLowerCase()}_balance`) || 0)
+    const dPrice = new Decimal(price || 0)
+
+    const equity = initialBalance1.times(dPrice).plus(initialBalance2)
+    // TODO: DECIMAL_BRIDGE
+    return equity.toNumber()
 }
 
 function getCurrentEquity(price) {
-    const m1Balance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
-    const m2Balance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
-    return (m1Balance * price) + m2Balance
+    const m1Balance = new Decimal(store.get(`${MARKET1.toLowerCase()}_balance`) || 0)
+    const m2Balance = new Decimal(store.get(`${MARKET2.toLowerCase()}_balance`) || 0)
+    const dPrice = new Decimal(price || 0)
+
+    const equity = m1Balance.times(dPrice).plus(m2Balance)
+    // TODO: DECIMAL_BRIDGE
+    return equity.toNumber()
 }
 
 function updatePeakEquity(price) {
-    const currentEquity = getCurrentEquity(price)
-    const initialEquity = getInitialEquity(price)
-    const storedPeak = parseFloat(store.get('peak_equity'))
+    const currentEquity = new Decimal(getCurrentEquity(price))
+    const initialEquity = new Decimal(getInitialEquity(price))
 
-    let peak = (!isNaN(storedPeak) && storedPeak > 0)
-        ? Math.max(storedPeak, currentEquity)
-        : Math.max(initialEquity, currentEquity)
+    const storedPeakRaw = store.get('peak_equity')
+    const storedPeak = new Decimal(storedPeakRaw !== undefined && storedPeakRaw !== null ? storedPeakRaw : 0)
 
-    if (peak !== storedPeak) {
-        store.put('peak_equity', peak)
+    let peak
+    if (!storedPeak.isNaN() && storedPeak.greaterThan(0)) {
+        peak = Decimal.max(storedPeak, currentEquity)
+    } else {
+        peak = Decimal.max(initialEquity, currentEquity)
     }
-    return peak
+
+    // TODO: DECIMAL_BRIDGE
+    const peakNum = peak.toNumber()
+    if (peakNum !== Number(storedPeakRaw)) {
+        store.put('peak_equity', peakNum)
+    }
+    return peakNum
 }
 
 function getDrawdownFromPeak(price, providedPeak) {
-    const currentEquity = getCurrentEquity(price)
-    const peakEquity = providedPeak || parseFloat(store.get('peak_equity')) || getInitialEquity(price)
-    if (peakEquity <= 0) return 0
-    return ((currentEquity - peakEquity) / peakEquity) * 100
+    const currentEquity = new Decimal(getCurrentEquity(price))
+
+    let peakEquity
+    if (providedPeak !== undefined) {
+        peakEquity = new Decimal(providedPeak)
+    } else {
+        const storedPeakRaw = store.get('peak_equity')
+        peakEquity = new Decimal(storedPeakRaw !== undefined && storedPeakRaw !== null ? storedPeakRaw : getInitialEquity(price))
+    }
+
+    if (peakEquity.lessThanOrEqualTo(0)) return 0
+
+    // ((currentEquity - peakEquity) / peakEquity) * 100
+    const drawdown = currentEquity.minus(peakEquity).dividedBy(peakEquity).times(100)
+    // TODO: DECIMAL_BRIDGE
+    return drawdown.toNumber()
+}
+
+function _getTradingEquityCurveDecimal(price) {
+    const frozenCapitalRaw = store.get('strategy_baseline_equity')
+
+    let frozenCapital
+    if (frozenCapitalRaw !== undefined && frozenCapitalRaw !== null && frozenCapitalRaw !== '') {
+        frozenCapital = ensureValidDecimal(frozenCapitalRaw, 'strategy_baseline_equity')
+    } else {
+        if (!price) throw new Error('[FAIL-CLOSED] Se requiere price para calcular initialEquity por falta de baseline')
+        frozenCapital = ensureValidDecimal(getInitialEquity(price), 'getInitialEquity()')
+    }
+
+    const profitsStoreRaw = store.get('profits')
+    let currentProfit
+    if (profitsStoreRaw !== undefined && profitsStoreRaw !== null && profitsStoreRaw !== '') {
+        currentProfit = ensureValidDecimal(profitsStoreRaw, 'profits')
+    } else {
+        if (!price) throw new Error('[FAIL-CLOSED] Se requiere price para calcular realProfits por falta de profits persistidos')
+        currentProfit = ensureValidDecimal(getRealProfits(price), 'getRealProfits()')
+    }
+
+    return frozenCapital.plus(currentProfit)
 }
 
 function getTradingEquityCurve(price) {
-    const frozenCapital = parseFloat(store.get('strategy_baseline_equity')) || (price ? getInitialEquity(price) : 0)
-    const profitsStore = parseFloat(store.get('profits'))
-    const currentProfit = !isNaN(profitsStore) ? profitsStore : (price ? parseFloat(getRealProfits(price)) || 0 : 0)
-    return frozenCapital + currentProfit
+    return _getTradingEquityCurveDecimal(price).toNumber()
 }
 
-function updatePeakEquityCurve(price) {
-    const equityCurve = getTradingEquityCurve(price)
-    const storedPeak = parseFloat(store.get('peak_equity_curve'))
-    let peak = (!isNaN(storedPeak) && storedPeak > 0)
-        ? Math.max(storedPeak, equityCurve)
-        : equityCurve
+function _updatePeakEquityCurveDecimal(price) {
+    const equityCurve = _getTradingEquityCurveDecimal(price)
+    const storedPeakRaw = store.get('peak_equity_curve')
 
-    if (peak !== storedPeak) {
-        store.put('peak_equity_curve', peak)
+    let peak
+    if (storedPeakRaw !== undefined && storedPeakRaw !== null && storedPeakRaw !== '') {
+        const storedPeak = ensureValidDecimal(storedPeakRaw, 'peak_equity_curve')
+        if (storedPeak.greaterThan(0)) {
+            peak = Decimal.max(storedPeak, equityCurve)
+        } else {
+            peak = equityCurve
+        }
+    } else {
+        peak = equityCurve
+    }
+
+    const peakNum = peak.toNumber()
+    if (peakNum !== Number(storedPeakRaw)) {
+        store.put('peak_equity_curve', peakNum)
     }
     return peak
 }
 
+function updatePeakEquityCurve(price) {
+    return _updatePeakEquityCurveDecimal(price).toNumber()
+}
+
+function _calculateTradingDrawdownDecimal(price, providedPeak) {
+    const equityCurve = _getTradingEquityCurveDecimal(price)
+
+    let peak
+    if (providedPeak !== undefined && providedPeak !== null) {
+        peak = ensureValidDecimal(providedPeak, 'providedPeak')
+    } else {
+        const storedPeakRaw = store.get('peak_equity_curve')
+        if (storedPeakRaw !== undefined && storedPeakRaw !== null && storedPeakRaw !== '') {
+            peak = ensureValidDecimal(storedPeakRaw, 'peak_equity_curve')
+        } else {
+            peak = _updatePeakEquityCurveDecimal(price)
+        }
+    }
+
+    if (peak.lessThanOrEqualTo(0)) {
+        throw new Error('[FAIL-CLOSED] El peak_equity_curve es <= 0 al calcular drawdown')
+    }
+
+    // ((equityCurve - peak) / peak) * 100
+    return equityCurve.minus(peak).dividedBy(peak).times(100)
+}
+
 function getTradingDrawdown(price, providedPeak) {
-    const equityCurve = getTradingEquityCurve(price)
-    const peak = (providedPeak !== undefined)
-        ? providedPeak
-        : (parseFloat(store.get('peak_equity_curve')) || updatePeakEquityCurve(price))
-    if (peak <= 0) return 0
-    return ((equityCurve - peak) / peak) * 100
+    return _calculateTradingDrawdownDecimal(price, providedPeak).toNumber()
+}
+
+function checkTradingDrawdown(price, providedPeak) {
+    if (!DRAWDOWN_KILL_PERCENT || DRAWDOWN_KILL_PERCENT <= 0) return { exceeded: false, drawdown: 0, limit: 0 };
+
+    const dDrawdown = _calculateTradingDrawdownDecimal(price, providedPeak)
+    const dLimit = ensureValidDecimal(DRAWDOWN_KILL_PERCENT, 'DRAWDOWN_KILL_PERCENT')
+
+    const isExceeded = dDrawdown.abs().greaterThanOrEqualTo(dLimit)
+
+    return {
+        exceeded: isExceeded,
+        drawdown: dDrawdown.toNumber(),
+        limit: DRAWDOWN_KILL_PERCENT
+    }
 }
 
 function checkDailyLoss(price) {
     if (!MAX_DAILY_LOSS_PERCENT || MAX_DAILY_LOSS_PERCENT <= 0) return { exceeded: false, loss: 0, limit: 0 };
-    
+
     const tzDateStr = new Date().toLocaleDateString('en-CA', { timeZone: RISK_DAY_TIMEZONE });
     const storedDate = store.get('daily_baseline_date');
     const liq = getLiquidationValue(price);
-    
+
     if (storedDate !== tzDateStr) {
         store.put('daily_baseline_date', tzDateStr);
         store.put('daily_baseline_liquidation_value', liq.current);
         return { exceeded: false, loss: 0, limit: -MAX_DAILY_LOSS_PERCENT };
     }
-    
-    const dailyBaseline = parseFloat(store.get('daily_baseline_liquidation_value')) || liq.current;
-    if (dailyBaseline <= 0) return { exceeded: false, loss: 0, limit: -MAX_DAILY_LOSS_PERCENT };
-    
-    const dailyLossPercent = ((liq.current - dailyBaseline) / dailyBaseline) * 100;
-    
-    if (dailyLossPercent <= -MAX_DAILY_LOSS_PERCENT) {
-        return { exceeded: true, loss: dailyLossPercent, limit: -MAX_DAILY_LOSS_PERCENT }
+
+    const dailyBaselineRaw = store.get('daily_baseline_liquidation_value')
+    let dailyBaseline
+    if (dailyBaselineRaw !== undefined && dailyBaselineRaw !== null && dailyBaselineRaw !== '') {
+        dailyBaseline = ensureValidDecimal(dailyBaselineRaw, 'daily_baseline_liquidation_value')
+    } else {
+        throw new Error('[FAIL-CLOSED] daily_baseline_liquidation_value está corrupto o vacío para el día actual')
     }
-    return { exceeded: false, loss: dailyLossPercent, limit: -MAX_DAILY_LOSS_PERCENT }
+
+    if (dailyBaseline.lessThanOrEqualTo(0)) {
+        throw new Error('[FAIL-CLOSED] dailyBaseline es <= 0 al evaluar dailyLoss')
+    }
+
+    const dCurrent = ensureValidDecimal(liq.current, 'liq.current')
+
+    // ((liq.current - dailyBaseline) / dailyBaseline) * 100;
+    const dailyLossPercent = dCurrent.minus(dailyBaseline).dividedBy(dailyBaseline).times(100);
+
+    const dLimit = ensureValidDecimal(-MAX_DAILY_LOSS_PERCENT, 'MAX_DAILY_LOSS_PERCENT (negative)')
+    const isExceeded = dailyLossPercent.lessThanOrEqualTo(dLimit)
+
+    return {
+        exceeded: isExceeded,
+        loss: dailyLossPercent.toNumber(),
+        limit: -MAX_DAILY_LOSS_PERCENT
+    }
 }
 
 function getLiquidationValue(price) {
-    const T_init = parseFloat(store.get('initial_liquidation_value')) || resolveInitialBaseline(MARKET2, price)
-    
-    const currentQuote = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
-    const currentBase = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
-    const T_curr = currentQuote + (currentBase * price)
-    
-    const pnl = T_curr - T_init
-    const percent = T_init > 0 ? (pnl / T_init) * 100 : 0
-    
-    return { initial: T_init, current: T_curr, pnl, percent }
+    const tInitRaw = store.get('initial_liquidation_value')
+    let T_init
+    if (tInitRaw !== undefined && tInitRaw !== null && tInitRaw !== '') {
+        T_init = ensureValidDecimal(tInitRaw, 'initial_liquidation_value')
+    } else {
+        if (!price) throw new Error('[FAIL-CLOSED] Falta price para calcular fallback initial_liquidation_value')
+        T_init = ensureValidDecimal(resolveInitialBaseline(MARKET2, price), 'resolveInitialBaseline()')
+    }
+
+    const quoteRaw = store.get(`${MARKET2.toLowerCase()}_balance`)
+    const currentQuote = ensureValidDecimal(quoteRaw !== undefined && quoteRaw !== null ? quoteRaw : 0, 'currentQuote')
+
+    const baseRaw = store.get(`${MARKET1.toLowerCase()}_balance`)
+    const currentBase = ensureValidDecimal(baseRaw !== undefined && baseRaw !== null ? baseRaw : 0, 'currentBase')
+
+    const dPrice = ensureValidDecimal(price !== undefined && price !== null ? price : 0, 'price en getLiquidationValue')
+
+    const T_curr = currentQuote.plus(currentBase.times(dPrice))
+
+    const pnl = T_curr.minus(T_init)
+
+    let percent = new Decimal(0)
+    if (T_init.greaterThan(0)) {
+        percent = pnl.dividedBy(T_init).times(100)
+    }
+
+    // TODO: DECIMAL_BRIDGE
+    return {
+        initial: T_init.toNumber(),
+        current: T_curr.toNumber(),
+        pnl: pnl.toNumber(),
+        percent: percent.toNumber()
+    }
 }
 
 function _logProfits(price) {
@@ -205,45 +355,59 @@ function _logProfits(price) {
         `Current Equity: ${parseFloat(currentEquity).toFixed(2)} ${MARKET2}, Initial: ${parseFloat(initialEquity).toFixed(2)} ${MARKET2}`)
     logColor(colors.gray,
         `Equity Curve: ${equityCurve.toFixed(2)} ${MARKET2}, Peak Curve: ${peakCurve.toFixed(2)} ${MARKET2}, Trading Drawdown: ${tradingDD.toFixed(2)}%`)
-    
+
     logColor(colors.gray,
         `Historial: ${parseInt(store.get('total_buys')) || 0} compras | ${parseInt(store.get('total_sells')) || 0} ventas | ${parseInt(store.get('completed_cycles')) || 0} ciclos completos`)
 }
 
 async function reconcileBalances(getBalances, tolerancePercent = 1) {
     const balances = await getBalances()
-    const localBase = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
-    const localQuote = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`)) || 0
-    const realBase = parseFloat(balances[MARKET1]) || 0
-    const realQuote = parseFloat(balances[MARKET2]) || 0
+    const localBase = new Decimal(store.get(`${MARKET1.toLowerCase()}_balance`) || 0)
+    const localQuote = new Decimal(store.get(`${MARKET2.toLowerCase()}_balance`) || 0)
+    const realBase = new Decimal(balances[MARKET1] || 0)
+    const realQuote = new Decimal(balances[MARKET2] || 0)
 
-    const absBaseDiff = Math.abs(realBase - localBase)
-    const absQuoteDiff = Math.abs(realQuote - localQuote)
+    const absBaseDiff = realBase.minus(localBase).absoluteValue()
+    const absQuoteDiff = realQuote.minus(localQuote).absoluteValue()
 
-    const baseMismatch = localBase > 0
-        ? (absBaseDiff / localBase) * 100
-        : (realBase > 0 && absBaseDiff > BALANCE_ABSOLUTE_TOLERANCE_BASE ? 100 : 0)
+    let baseMismatch = new Decimal(0)
+    if (localBase.greaterThan(0)) {
+        baseMismatch = absBaseDiff.dividedBy(localBase).times(100)
+    } else if (realBase.greaterThan(0) && absBaseDiff.greaterThan(BALANCE_ABSOLUTE_TOLERANCE_BASE)) {
+        baseMismatch = new Decimal(100)
+    }
 
-    const quoteMismatch = localQuote > 0
-        ? (absQuoteDiff / localQuote) * 100
-        : (realQuote > 0 && absQuoteDiff > BALANCE_ABSOLUTE_TOLERANCE_QUOTE ? 100 : 0)
+    let quoteMismatch = new Decimal(0)
+    if (localQuote.greaterThan(0)) {
+        quoteMismatch = absQuoteDiff.dividedBy(localQuote).times(100)
+    } else if (realQuote.greaterThan(0) && absQuoteDiff.greaterThan(BALANCE_ABSOLUTE_TOLERANCE_QUOTE)) {
+        quoteMismatch = new Decimal(100)
+    }
 
-    const maxMismatch = Math.max(baseMismatch, quoteMismatch)
+    const maxMismatch = Decimal.max(baseMismatch, quoteMismatch)
 
-    if (maxMismatch > tolerancePercent || (localBase === 0 && realBase > BALANCE_ABSOLUTE_TOLERANCE_BASE) || (localQuote === 0 && realQuote > BALANCE_ABSOLUTE_TOLERANCE_QUOTE)) {
-        const errorMessage = `[STATE MISMATCH] Desincronización grave detectada: ${MARKET1} local=${localBase}, real=${realBase}, drift=${baseMismatch.toFixed(2)}%; ${MARKET2} local=${localQuote}, real=${realQuote}, drift=${quoteMismatch.toFixed(2)}%; umbral=${tolerancePercent}%.`
+    if (maxMismatch.greaterThan(tolerancePercent) ||
+        (localBase.isZero() && realBase.greaterThan(BALANCE_ABSOLUTE_TOLERANCE_BASE)) ||
+        (localQuote.isZero() && realQuote.greaterThan(BALANCE_ABSOLUTE_TOLERANCE_QUOTE))) {
+
+        // TODO: DECIMAL_BRIDGE
+        const baseMisNum = baseMismatch.toNumber()
+        const quoteMisNum = quoteMismatch.toNumber()
+
+        const errorMessage = `[STATE MISMATCH] Desincronización grave detectada: ${MARKET1} local=${localBase.toNumber()}, real=${realBase.toNumber()}, drift=${baseMisNum.toFixed(2)}%; ${MARKET2} local=${localQuote.toNumber()}, real=${realQuote.toNumber()}, drift=${quoteMisNum.toFixed(2)}%; umbral=${tolerancePercent}%.`
         logColor(colors.red, errorMessage)
         throw new Error(errorMessage)
     }
 
+    // TODO: DECIMAL_BRIDGE
     return {
-        localBase,
-        localQuote,
-        realBase,
-        realQuote,
-        baseMismatch,
-        quoteMismatch,
-        maxMismatch,
+        localBase: localBase.toNumber(),
+        localQuote: localQuote.toNumber(),
+        realBase: realBase.toNumber(),
+        realQuote: realQuote.toNumber(),
+        baseMismatch: baseMismatch.toNumber(),
+        quoteMismatch: quoteMismatch.toNumber(),
+        maxMismatch: maxMismatch.toNumber(),
     }
 }
 
@@ -259,28 +423,38 @@ function _closeBot() {
 
 function resolveInitialBaseline(market2 = MARKET2, fallbackPrice = 0) {
     const existing = store.get('strategy_baseline_equity')
-    let baseline = 0
+    let baseline = new Decimal(0)
+
     if (existing !== undefined && existing !== null) {
-        baseline = parseFloat(existing)
+        baseline = new Decimal(existing)
     } else {
         const quoteKey = `initial_${market2.toLowerCase()}_balance`
         const fallbackQuoteKey = `${market2.toLowerCase()}_balance`
-        baseline = parseFloat(store.get(quoteKey)) || parseFloat(store.get(fallbackQuoteKey)) || 0
-        store.put('strategy_baseline_equity', baseline)
+        const val1 = store.get(quoteKey)
+        const val2 = store.get(fallbackQuoteKey)
+
+        baseline = new Decimal(val1 !== undefined && val1 !== null ? val1 : (val2 !== undefined && val2 !== null ? val2 : 0))
+        // TODO: DECIMAL_BRIDGE
+        store.put('strategy_baseline_equity', baseline.toNumber())
     }
 
     const existingPeak = store.get('peak_equity_curve')
     if (existingPeak === undefined || existingPeak === null) {
-        store.put('peak_equity_curve', baseline)
+        // TODO: DECIMAL_BRIDGE
+        store.put('peak_equity_curve', baseline.toNumber())
     }
-    
+
     const liqValue = store.get('initial_liquidation_value')
     if (liqValue === undefined || liqValue === null) {
-        const base = parseFloat(store.get(`initial_${MARKET1.toLowerCase()}_balance`)) || 0
-        store.put('initial_liquidation_value', baseline + (base * fallbackPrice))
+        const baseRaw = store.get(`initial_${MARKET1.toLowerCase()}_balance`)
+        const base = new Decimal(baseRaw !== undefined && baseRaw !== null ? baseRaw : 0)
+        const dFallback = new Decimal(fallbackPrice || 0)
+        // TODO: DECIMAL_BRIDGE
+        store.put('initial_liquidation_value', baseline.plus(base.times(dFallback)).toNumber())
     }
-    
-    return baseline
+
+    // TODO: DECIMAL_BRIDGE
+    return baseline.toNumber()
 }
 
 module.exports = {
@@ -297,6 +471,7 @@ module.exports = {
     getTradingEquityCurve,
     updatePeakEquityCurve,
     getTradingDrawdown,
+    checkTradingDrawdown,
     _logProfits,
     getLiquidationValue,
     reconcileBalances,

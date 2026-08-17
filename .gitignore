@@ -78,3 +78,4 @@ coverage/
 data
 .env
 logs/*.log
+test-debug*

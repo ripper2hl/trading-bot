@@ -14,6 +14,7 @@
     "better-sqlite3": "^13.0.3",
     "binance-api-node": "^0.12.9",
     "comma-number": "^2.1.0",
+    "decimal.js": "^10.6.0",
     "dotenv": "^16.4.7",
     "moment": "^2.30.1",
     "node-storage": "0.0.9",

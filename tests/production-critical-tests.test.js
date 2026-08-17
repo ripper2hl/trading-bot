@@ -95,8 +95,8 @@ resetPersistedStoreFile()
 
     resetStoreState(store)
     store.put('orders', [
-      { id: 'o1', amount: 1, status: 'pending', buy_price: 100, sell_price: 101 },
-      { id: 'o2', amount: 2, status: 'pending', buy_price: 100, sell_price: 105 },
+      { id: 'o1', amount: 1, status: 'pending', buy_price: 100, sell_price: 101, sl_price: 90 },
+      { id: 'o2', amount: 2, status: 'pending', buy_price: 100, sell_price: 105, sl_price: 90 },
     ])
     store.put('eth_balance', 3)
     store.put('usdt_balance', 0)
@@ -111,7 +111,7 @@ resetPersistedStoreFile()
     const originalGetQuantity = exchange.getQuantity
     const originalMarketSell = exchange.marketSell
     exchange.getQuantity = async (amount) => amount
-    exchange.marketSell = async () => ({ status: 'FILLED', fills: [{ price: '101' }] })
+    exchange.marketSell = async () => ({ status: 'FILLED', fills: [{ price: '101', commission: '0.1' }] })
 
     const { _sell } = require('../controllers/tradingEngine.js')
     const result = await _sell(101, async () => {}, () => {})

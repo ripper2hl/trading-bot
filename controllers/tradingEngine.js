@@ -11,6 +11,7 @@ const {
     GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO
 } = require('../config/constants')
 const { log, logColor, colors } = require('../utils/logger')
+const { Decimal } = require('decimal.js')
 const { store, _newPriceReset, _calculateProfits } = require('../services/state')
 const { marketBuy, marketSell, getBalances, getPrice, getQuantity, getFees, getMinBuy } = require('../services/exchange')
 const { updateIntent } = require('../services/ledger')
@@ -46,11 +47,14 @@ function getToSold(price, changeStatus) {
     for (var i = 0; i < orders.length; i++) {
         var order = orders[i]
 
+        const dPrice = new Decimal(price)
+        const dSlPrice = new Decimal(order.sl_price)
+
         // Condicion de Stop-Loss de Grid
         const isStopLossHit = GRID_STOP_LOSS_ENABLED
             && getOrderId() === order.id
             && store.get(`${MARKET2.toLowerCase()}_balance`) < BUY_ORDER_AMOUNT
-            && price < order.sl_price
+            && dPrice.lessThanOrEqualTo(dSlPrice)
 
         if (isStopLossHit) {
             if (changeStatus) {
@@ -61,16 +65,20 @@ function getToSold(price, changeStatus) {
             continue
         }
 
+        const dSellPrice = new Decimal(order.sell_price)
+
         // === TRAILING TAKE-PROFIT ===
-        if (price >= order.sell_price) {
+        if (dPrice.greaterThanOrEqualTo(dSellPrice)) {
             if (TRAILING_TP_PERCENT > 0) {
-                if (!order.peak_price || price > order.peak_price) {
-                    order.peak_price = price
+                if (!order.peak_price || dPrice.greaterThan(new Decimal(order.peak_price))) {
+                    order.peak_price = dPrice.toNumber()
                 }
 
-                const retrace = ((order.peak_price - price) / order.peak_price) * 100
+                const dPeakPrice = new Decimal(order.peak_price)
+                const dRetrace = dPeakPrice.minus(dPrice).dividedBy(dPeakPrice).times(100)
+                const dTrailingTpPercent = new Decimal(TRAILING_TP_PERCENT)
 
-                if (retrace >= TRAILING_TP_PERCENT) {
+                if (dRetrace.greaterThanOrEqualTo(dTrailingTpPercent)) {
                     if (changeStatus) {
                         order.sold_price = price
                         if (order.status !== 'BELOW_NOTIONAL') order.status = 'selling'
@@ -108,49 +116,64 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
         return
     }
 
-    const currentBalance = parseFloat(store.get(`${MARKET2.toLowerCase()}_balance`))
+    const dCurrentBalance = new Decimal(store.get(`${MARKET2.toLowerCase()}_balance`) || 0)
     const totalExposure = boughtOrders.reduce((sum, order) => {
-        const orderAmount = parseFloat(order.amount) || 0
-        const orderPrice = parseFloat(order.buy_price) || 0
-        return sum + (orderAmount * orderPrice)
-    }, 0)
+        const orderAmount = new Decimal(order.amount || 0)
+        const orderPrice = new Decimal(order.buy_price || 0)
+        return sum.plus(orderAmount.times(orderPrice))
+    }, new Decimal(0))
     const currentInventory = boughtOrders.reduce((sum, order) => {
-        const orderAmount = parseFloat(order.amount) || 0
-        return sum + orderAmount
-    }, 0)
-    
-    const maxAllowed = currentBalance * (MAX_POSITION_PERCENT / 100)
-    const projectedExposure = totalExposure + parseFloat(BUY_ORDER_AMOUNT)
-    const projectedInventory = currentInventory + (parseFloat(BUY_ORDER_AMOUNT) / price)
+        const orderAmount = new Decimal(order.amount || 0)
+        return sum.plus(orderAmount)
+    }, new Decimal(0))
 
-    if (MAX_CAPITAL_USDT > 0 && projectedExposure > MAX_CAPITAL_USDT) {
-        logColor(colors.yellow, `[RISK] Capital proyectado ${projectedExposure.toFixed(2)} ${MARKET2} excedería MAX_CAPITAL_USDT (${MAX_CAPITAL_USDT}). Compra bloqueada.`)
+    const dMaxPositionPercent = new Decimal(MAX_POSITION_PERCENT)
+    const maxAllowed = dCurrentBalance.times(dMaxPositionPercent).dividedBy(100)
+
+    const dBuyOrderAmount = new Decimal(BUY_ORDER_AMOUNT)
+    const dPrice = new Decimal(price)
+
+    const projectedExposure = totalExposure.plus(dBuyOrderAmount)
+    const projectedInventory = currentInventory.plus(dBuyOrderAmount.dividedBy(dPrice))
+
+    if (MAX_CAPITAL_USDT > 0 && projectedExposure.greaterThan(MAX_CAPITAL_USDT)) {
+        logColor(colors.yellow, `[RISK] Capital proyectado ${projectedExposure.toNumber().toFixed(2)} ${MARKET2} excedería MAX_CAPITAL_USDT (${MAX_CAPITAL_USDT}). Compra bloqueada.`)
         return
     }
 
-    if (MAX_BTC_INVENTORY > 0 && projectedInventory > MAX_BTC_INVENTORY) {
-        logColor(colors.yellow, `[RISK] Inventario proyectado ${projectedInventory.toFixed(6)} ${MARKET1} excedería MAX_BTC_INVENTORY (${MAX_BTC_INVENTORY}). Compra bloqueada.`)
+    if (MAX_BTC_INVENTORY > 0 && projectedInventory.greaterThan(MAX_BTC_INVENTORY)) {
+        logColor(colors.yellow, `[RISK] Inventario proyectado ${projectedInventory.toNumber().toFixed(6)} ${MARKET1} excedería MAX_BTC_INVENTORY (${MAX_BTC_INVENTORY}). Compra bloqueada.`)
         return
     }
 
-    if (projectedExposure > maxAllowed) {
-        logColor(colors.yellow, `[POSICION] Exposicion proyectada ${projectedExposure.toFixed(2)} ${MARKET2} excede el ${MAX_POSITION_PERCENT}% del balance (${maxAllowed.toFixed(2)} ${MARKET2}). Orden bloqueada.`)
+    if (projectedExposure.greaterThan(maxAllowed)) {
+        logColor(colors.yellow, `[POSICION] Exposicion proyectada ${projectedExposure.toNumber().toFixed(2)} ${MARKET2} excede el ${MAX_POSITION_PERCENT}% del balance (${maxAllowed.toNumber().toFixed(2)} ${MARKET2}). Orden bloqueada.`)
         return
     }
 
-    if (currentBalance >= BUY_ORDER_AMOUNT) {
+    if (dCurrentBalance.greaterThanOrEqualTo(dBuyOrderAmount)) {
         const activeOrders = store.get('orders') || []
 
         const dynamicSellPercent = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
-        const targetNetPercent = dynamicSellPercent / 100
-        const netMultiplier = (1 + targetNetPercent) / ((1 - FEE_RATE) * (1 - FEE_RATE))
-        const targetSellPrice = price * netMultiplier
-        var slFactor = GRID_STOP_LOSS_PERCENT * price / 100
+        const dDynamicSellPercent = new Decimal(dynamicSellPercent)
+        const dTargetNetPercent = dDynamicSellPercent.dividedBy(100)
+
+        const dOne = new Decimal(1)
+        const dFeeRate = new Decimal(FEE_RATE)
+        const dFeeFactor = dOne.minus(dFeeRate)
+        const dNetMultiplier = dOne.plus(dTargetNetPercent).dividedBy(dFeeFactor.times(dFeeFactor))
+
+        const dPrice = new Decimal(price)
+        const dTargetSellPrice = dPrice.times(dNetMultiplier)
+
+        const dGridStopLossPercent = new Decimal(GRID_STOP_LOSS_PERCENT)
+        const dSlFactor = dGridStopLossPercent.times(dPrice).dividedBy(100)
+        const dSlPrice = dPrice.minus(dSlFactor)
 
         const order = {
             buy_price: price,
-            sell_price: targetSellPrice,
-            sl_price: price - slFactor,
+            sell_price: dTargetSellPrice.toNumber(),
+            sl_price: dSlPrice.toNumber(),
             sold_price: 0,
             status: 'pending',
             profit: 0,
@@ -163,24 +186,38 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             ==================
             amountIn: ${parseFloat(BUY_ORDER_AMOUNT).toFixed(2)} ${MARKET2}
             amountOut: ${(BUY_ORDER_AMOUNT / price).toFixed(6)} ${MARKET1}
-            Target Sell Price: ${targetSellPrice.toFixed(4)} ${MARKET2}
+            Target Sell Price: ${dTargetSellPrice.toNumber().toFixed(4)} ${MARKET2}
         `)
 
         const res = await marketBuy(amount, true)
         if (res && res.status === 'FILLED') {
             order.status = 'bought'
             order.id = res.orderId
-            order.buy_fee = parseFloat((await getFees(res.fills[0])))
-            order.amount = res.executedQty - res.fills[0].commission
-            store.put('fees', parseFloat(store.get('fees')) + order.buy_fee)
-            order.buy_price = parseFloat(res.fills[0].price)
-            
+
+            // TODO: DECIMAL_BRIDGE (exchange fills API & local state store)
+            const dFee = new Decimal(await getFees(res.fills[0]))
+            order.buy_fee = dFee.toNumber()
+            order.amount = new Decimal(res.executedQty).minus(new Decimal(res.fills[0].commission)).toNumber()
+
+            const prevFees = new Decimal(store.get('fees') || 0)
+            store.put('fees', prevFees.plus(dFee).toNumber())
+
+            const dBuyPrice = new Decimal(res.fills[0].price)
+            order.buy_price = dBuyPrice.toNumber()
+
             const dynamicSellPercent = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
-            const targetNetPercent = dynamicSellPercent / 100
-            const netMultiplier = (1 + targetNetPercent) / ((1 - FEE_RATE) * (1 - FEE_RATE))
-            order.sell_price = order.buy_price * netMultiplier
-            
-            if (order.sell_price <= order.buy_price) {
+            const dDynamicSellPercent = new Decimal(dynamicSellPercent)
+            const dTargetNetPercent = dDynamicSellPercent.dividedBy(100)
+
+            const dOne = new Decimal(1)
+            const dFeeRate = new Decimal(FEE_RATE)
+            const dFeeFactor = dOne.minus(dFeeRate)
+            const dNetMultiplier = dOne.plus(dTargetNetPercent).dividedBy(dFeeFactor.times(dFeeFactor))
+
+            const dSellPrice = dBuyPrice.times(dNetMultiplier)
+            order.sell_price = dSellPrice.toNumber()
+
+            if (dSellPrice.lessThanOrEqualTo(dBuyPrice)) {
                 logColor(colors.red, `[CRITICAL] Error de cálculo: Sell price (${order.sell_price}) <= Buy price (${order.buy_price}). Orden no persistida en el Grid.`)
                 return
             }
@@ -188,7 +225,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             activeOrders.push(order)
             store.put('start_price', order.buy_price)
             await updateBalancesFn()
-            
+
             store.put('total_buys', (parseInt(store.get('total_buys')) || 0) + 1)
 
             logColor(colors.green, '=============================')
@@ -209,21 +246,22 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
 
 async function _sell(price, updateBalancesFn, notifyFn) {
     const orders = store.get('orders')
-    
+
     // --- DESFIBRILADOR DE ÓRDENES (Recuperación de BELOW_NOTIONAL) ---
     let recoveredZombies = false
     const minNotional = await getMinBuy()
-    
+
     for (let i = 0; i < orders.length; i++) {
         if (orders[i].status === 'BELOW_NOTIONAL') {
-            const notionalValue = parseFloat(orders[i].amount) * price
-            if (notionalValue >= minNotional) {
+            const dOrderAmount = new Decimal(orders[i].amount || 0)
+            const notionalValue = dOrderAmount.times(new Decimal(price))
+            if (notionalValue.greaterThanOrEqualTo(minNotional)) {
                 orders[i].status = 'bought'
                 recoveredZombies = true
             }
         }
     }
-    
+
     if (recoveredZombies) {
         store.put('orders', orders)
     }
@@ -232,47 +270,53 @@ async function _sell(price, updateBalancesFn, notifyFn) {
     const toSold = getToSold(price, true)
 
     if (toSold.length > 0) {
-        var totalAmount = parseFloat(toSold.map(order => order.amount).reduce((prev, next) => parseFloat(prev) + parseFloat(next)))
+        const totalAmount = toSold.reduce((sum, order) => sum.plus(new Decimal(order.amount || 0)), new Decimal(0))
 
         // Barrido de polvo LIMITADO: solo barrer si el exceso es < 1%
-        let availableBalance = 0
+        let dAvailableBalance = new Decimal(0)
         try {
             const balances = await getBalances()
-            availableBalance = balances[MARKET1] || 0
+            dAvailableBalance = new Decimal(balances[MARKET1] || 0)
         } catch (e) {
-            availableBalance = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
+            dAvailableBalance = new Decimal(store.get(`${MARKET1.toLowerCase()}_balance`) || 0)
         }
 
         let amountToSell = totalAmount
-        const dustExcess = availableBalance - totalAmount
-        const dustThreshold = totalAmount * 0.01
-        if (dustExcess > 0 && dustExcess <= dustThreshold) {
-            amountToSell = availableBalance
-            logColor(colors.gray, `[DUST] Barriendo polvo: +${dustExcess.toFixed(8)} ${MARKET1}`)
-        } else if (availableBalance < totalAmount && availableBalance > 0) {
-            amountToSell = availableBalance
+        const dustExcess = dAvailableBalance.minus(totalAmount)
+        const dustThreshold = totalAmount.times(0.01)
+
+        if (dustExcess.greaterThan(0) && dustExcess.lessThanOrEqualTo(dustThreshold)) {
+            amountToSell = dAvailableBalance
+            logColor(colors.gray, `[DUST] Barriendo polvo: +${dustExcess.toNumber().toFixed(8)} ${MARKET1}`)
+        } else if (dAvailableBalance.lessThan(totalAmount) && dAvailableBalance.greaterThan(0)) {
+            amountToSell = dAvailableBalance
         }
 
-        if (amountToSell > 0) {
+        if (amountToSell.greaterThan(0)) {
+            // TODO: DECIMAL_BRIDGE (downstream methods expect Number primitives for now)
+            const numAmountToSell = amountToSell.toNumber()
+
             log(`
                 Selling ${MARKET1}
                 =================
-                amountIn: ${amountToSell.toFixed(6)} ${MARKET1}
-                amountOut: ${parseFloat(amountToSell * price).toFixed(2)} ${MARKET2}
+                amountIn: ${amountToSell.toNumber().toFixed(6)} ${MARKET1}
+                amountOut: ${amountToSell.times(new Decimal(price)).toNumber().toFixed(2)} ${MARKET2}
             `)
 
-            const lotQuantity = await getQuantity(amountToSell)
-            if (parseFloat(lotQuantity) <= 0) {
+            const lotQuantity = await getQuantity(numAmountToSell)
+            const dLotQuantity = new Decimal(lotQuantity || 0)
+            if (dLotQuantity.lessThanOrEqualTo(0)) {
                 logColor(colors.red, '[ADVERTENCIA] Cantidad a vender por debajo del tamanho de lote permitido.')
                 return false
             }
 
-            const notionalValue = parseFloat(lotQuantity) * price
-            
-            if (notionalValue < minNotional) {
+            const dPrice = new Decimal(price)
+            const notionalValue = dLotQuantity.times(dPrice)
+
+            if (notionalValue.lessThan(new Decimal(minNotional))) {
                 const hasNewOrders = toSold.some(o => o.status !== 'BELOW_NOTIONAL')
                 if (hasNewOrders) {
-                    logColor(colors.yellow, `[NOTIONAL] Orden por debajo del mínimo de Binance (${minNotional} USDT). Valor a vender: $${notionalValue.toFixed(4)} USDT. Esperando que el balance crezca...`)
+                    logColor(colors.yellow, `[NOTIONAL] Orden por debajo del mínimo de Binance (${minNotional} USDT). Valor a vender: $${notionalValue.toNumber().toFixed(4)} USDT. Esperando que el balance crezca...`)
                     toSold.forEach(o => { o.status = 'BELOW_NOTIONAL' })
                     store.put('orders', orders)
                 }
@@ -284,42 +328,54 @@ async function _sell(price, updateBalancesFn, notifyFn) {
 
             const res = await marketSell(lotQuantity)
             if (res && res.status === 'FILLED') {
-                const _price = parseFloat(res.fills[0].price)
+                const _price = new Decimal(res.fills[0].price)
                 let remainingToSell = amountToSell
 
                 for (var i = 0; i < orders.length; i++) {
                     var order = orders[i]
                     for (var j = 0; j < toSold.length; j++) {
                         if (order.id == toSold[j].id) {
-                            const orderAmount = parseFloat(order.amount) || 0
-                            if (remainingToSell <= 0) break
+                            const orderAmount = new Decimal(order.amount || 0)
+                            if (remainingToSell.lessThanOrEqualTo(0)) break
 
-                            const sellableAmount = Math.min(orderAmount, remainingToSell)
-                            if (sellableAmount >= orderAmount) {
-                                toSold[j].profit = (orderAmount * _price) - (orderAmount * parseFloat(toSold[j].buy_price))
-                                toSold[j].sell_fee = parseFloat((await getFees(res.fills[0])))
-                                toSold[j].profit -= (toSold[j].sell_fee + toSold[j].buy_fee)
+                            const sellableAmount = Decimal.min(orderAmount, remainingToSell)
+                            if (sellableAmount.greaterThanOrEqualTo(orderAmount)) {
+                                const grossProfit = orderAmount.times(_price).minus(orderAmount.times(new Decimal(toSold[j].buy_price)))
+
+                                const dSellFee = new Decimal(await getFees(res.fills[0]))
+                                toSold[j].sell_fee = dSellFee.toNumber() // TODO: DECIMAL_BRIDGE (saving to local store)
+
+                                const dBuyFee = new Decimal(toSold[j].buy_fee || 0)
+                                const netProfit = grossProfit.minus(dSellFee.plus(dBuyFee))
+
+                                toSold[j].profit = netProfit.toNumber()
                                 toSold[j].status = 'sold'
                                 orders[i] = toSold[j]
-                                store.put('fees', parseFloat(store.get('fees')) + orders[i].sell_fee)
-                                store.put('sl_losses', parseFloat(store.get('sl_losses')) + orders[i].profit)
-                                remainingToSell -= orderAmount
+
+                                const prevFees = new Decimal(store.get('fees') || 0)
+                                store.put('fees', prevFees.plus(dSellFee).toNumber())
+
+                                const prevLosses = new Decimal(store.get('sl_losses') || 0)
+                                store.put('sl_losses', prevLosses.plus(netProfit).toNumber())
+
+                                remainingToSell = remainingToSell.minus(orderAmount)
                             } else {
-                                logColor(colors.gray, `[PARTIAL] Venta parcial detectada para ${order.id}: ${sellableAmount.toFixed(6)} ${MARKET1} cubiertos; el resto queda pendiente.`)
-                                remainingToSell = 0
+                                logColor(colors.gray, `[PARTIAL] Venta parcial detectada para ${order.id}: ${sellableAmount.toNumber().toFixed(6)} ${MARKET1} cubiertos; el resto queda pendiente.`)
+                                remainingToSell = new Decimal(0)
                             }
                         }
                     }
                 }
 
-                store.put('start_price', _price)
+                const finalNumPrice = _price.toNumber()
+                store.put('start_price', finalNumPrice)
                 await updateBalancesFn()
 
                 store.put('total_sells', (parseInt(store.get('total_sells')) || 0) + 1)
 
                 logColor(colors.red, '=============================')
                 logColor(colors.red,
-                    `Sold ${amountToSell.toFixed(6)} ${MARKET1} for ${parseFloat(amountToSell * _price).toFixed(2)} ${MARKET2}, Price: ${_price}\n`)
+                    `Sold ${numAmountToSell.toFixed(6)} ${MARKET1} for ${amountToSell.times(_price).toNumber().toFixed(2)} ${MARKET2}, Price: ${finalNumPrice}\n`)
                 logColor(colors.red, '=============================')
 
                 _calculateProfits()
