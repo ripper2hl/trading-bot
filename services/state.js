@@ -9,7 +9,9 @@ const fs = require('fs')
 const {
     MARKET1, MARKET2, MARKET,
     BALANCE_ABSOLUTE_TOLERANCE_BASE,
-    BALANCE_ABSOLUTE_TOLERANCE_QUOTE
+    BALANCE_ABSOLUTE_TOLERANCE_QUOTE,
+    MAX_DAILY_LOSS_PERCENT,
+    RISK_DAY_TIMEZONE
 } = require('../config/constants')
 const { log, logColor, colors } = require('../utils/logger')
 
@@ -136,6 +138,30 @@ function getTradingDrawdown(price, providedPeak) {
         : (parseFloat(store.get('peak_equity_curve')) || updatePeakEquityCurve(price))
     if (peak <= 0) return 0
     return ((equityCurve - peak) / peak) * 100
+}
+
+function checkDailyLoss(price) {
+    if (!MAX_DAILY_LOSS_PERCENT || MAX_DAILY_LOSS_PERCENT <= 0) return { exceeded: false, loss: 0, limit: 0 };
+    
+    const tzDateStr = new Date().toLocaleDateString('en-CA', { timeZone: RISK_DAY_TIMEZONE });
+    const storedDate = store.get('daily_baseline_date');
+    const liq = getLiquidationValue(price);
+    
+    if (storedDate !== tzDateStr) {
+        store.put('daily_baseline_date', tzDateStr);
+        store.put('daily_baseline_liquidation_value', liq.current);
+        return { exceeded: false, loss: 0, limit: -MAX_DAILY_LOSS_PERCENT };
+    }
+    
+    const dailyBaseline = parseFloat(store.get('daily_baseline_liquidation_value')) || liq.current;
+    if (dailyBaseline <= 0) return { exceeded: false, loss: 0, limit: -MAX_DAILY_LOSS_PERCENT };
+    
+    const dailyLossPercent = ((liq.current - dailyBaseline) / dailyBaseline) * 100;
+    
+    if (dailyLossPercent <= -MAX_DAILY_LOSS_PERCENT) {
+        return { exceeded: true, loss: dailyLossPercent, limit: -MAX_DAILY_LOSS_PERCENT }
+    }
+    return { exceeded: false, loss: dailyLossPercent, limit: -MAX_DAILY_LOSS_PERCENT }
 }
 
 function getLiquidationValue(price) {
@@ -275,5 +301,6 @@ module.exports = {
     getLiquidationValue,
     reconcileBalances,
     resolveInitialBaseline,
+    checkDailyLoss,
     _closeBot,
 }

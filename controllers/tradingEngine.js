@@ -5,6 +5,8 @@
  */
 const {
     MARKET1, MARKET2, MARKET, BUY_ORDER_AMOUNT,
+    MAX_CAPITAL_USDT,
+    MAX_BTC_INVENTORY,
     SELL_PERCENT, MAX_POSITION_PERCENT, MAX_OPEN_GRID_ORDERS, FEE_RATE, TRAILING_TP_PERCENT,
     GRID_STOP_LOSS_ENABLED, GRID_STOP_LOSS_PERCENT, GRID_STOP_LOSS_FIFO
 } = require('../config/constants')
@@ -112,8 +114,24 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
         const orderPrice = parseFloat(order.buy_price) || 0
         return sum + (orderAmount * orderPrice)
     }, 0)
+    const currentInventory = boughtOrders.reduce((sum, order) => {
+        const orderAmount = parseFloat(order.amount) || 0
+        return sum + orderAmount
+    }, 0)
+    
     const maxAllowed = currentBalance * (MAX_POSITION_PERCENT / 100)
     const projectedExposure = totalExposure + parseFloat(BUY_ORDER_AMOUNT)
+    const projectedInventory = currentInventory + (parseFloat(BUY_ORDER_AMOUNT) / price)
+
+    if (MAX_CAPITAL_USDT > 0 && projectedExposure > MAX_CAPITAL_USDT) {
+        logColor(colors.yellow, `[RISK] Capital proyectado ${projectedExposure.toFixed(2)} ${MARKET2} excedería MAX_CAPITAL_USDT (${MAX_CAPITAL_USDT}). Compra bloqueada.`)
+        return
+    }
+
+    if (MAX_BTC_INVENTORY > 0 && projectedInventory > MAX_BTC_INVENTORY) {
+        logColor(colors.yellow, `[RISK] Inventario proyectado ${projectedInventory.toFixed(6)} ${MARKET1} excedería MAX_BTC_INVENTORY (${MAX_BTC_INVENTORY}). Compra bloqueada.`)
+        return
+    }
 
     if (projectedExposure > maxAllowed) {
         logColor(colors.yellow, `[POSICION] Exposicion proyectada ${projectedExposure.toFixed(2)} ${MARKET2} excede el ${MAX_POSITION_PERCENT}% del balance (${maxAllowed.toFixed(2)} ${MARKET2}). Orden bloqueada.`)

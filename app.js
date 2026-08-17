@@ -22,7 +22,7 @@ const { sleep } = require('./utils/network')
 const { NotifyTelegram } = require('./services/TelegramNotify')
 const {
     store, elapsedTime, _updateBalances, getRealProfits, getInitialEquity,
-    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances, resolveInitialBaseline
+    getCurrentEquity, updatePeakEquity, getDrawdownFromPeak, getTradingEquityCurve, updatePeakEquityCurve, getTradingDrawdown, _logProfits, _closeBot, reconcileBalances, resolveInitialBaseline, checkDailyLoss
 } = require('./services/state')
 const {
     getBalances, getPrice, getMinBuy, clearStart, _sellAll, withdraw, getKlines
@@ -225,6 +225,14 @@ async function broadcast() {
                 logColor(colors.red, `[KILL-SWITCH] Peak Equity Curve: ${peakEquityCurve.toFixed(2)} ${MARKET2}, Equity Curve Actual: ${equityCurve.toFixed(2)} ${MARKET2}`)
                 logColor(colors.red, `[KILL-SWITCH] Trading Drawdown del ${absTradingDrawdown.toFixed(3)}% desde el máximo de la curva de equity supera el límite de ${DRAWDOWN_KILL_PERCENT}%. Deteniendo operaciones.`)
                 logColor(colors.red, '[KILL-SWITCH] Se requiere intervención manual para reanudar.')
+                _notifyTelegram(marketPrice, 'sell')
+            }
+            
+            const dailyCheck = checkDailyLoss(marketPrice)
+            if (dailyCheck.exceeded && !isDrawdownKilled()) {
+                setDrawdownKilled(true)
+                logColor(colors.red, `[KILL-SWITCH] Máxima pérdida diaria alcanzada: ${dailyCheck.loss.toFixed(2)}% (Límite: ${dailyCheck.limit}%). Deteniendo operaciones.`)
+                logColor(colors.red, '[KILL-SWITCH] Se requiere intervención manual para reanudar o esperar al inicio del próximo día.')
                 _notifyTelegram(marketPrice, 'sell')
             }
 

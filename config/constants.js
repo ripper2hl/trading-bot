@@ -62,6 +62,9 @@ function validateBootstrapConfig() {
         TAKE_PROFIT_PERCENT: process.env.TAKE_PROFIT_PERCENT,
         MAX_POSITION_PERCENT: process.env.MAX_POSITION_PERCENT,
         DRAWDOWN_KILL_PERCENT: process.env.DRAWDOWN_KILL_PERCENT,
+        MAX_CAPITAL_USDT: process.env.MAX_CAPITAL_USDT,
+        MAX_BTC_INVENTORY: process.env.MAX_BTC_INVENTORY,
+        MAX_DAILY_LOSS_PERCENT: process.env.MAX_DAILY_LOSS_PERCENT,
         MAX_OPEN_GRID_ORDERS: process.env.MAX_OPEN_GRID_ORDERS,
         FEE_RATE: process.env.FEE_RATE,
         POLL_INTERVAL_MS: process.env.POLL_INTERVAL_MS,
@@ -103,6 +106,10 @@ const STOP_LOSS_PERCENT = ensureValidNumeric(process.env.STOP_LOSS_PERCENT, 'STO
 const TAKE_PROFIT_PERCENT = ensureValidNumeric(process.env.TAKE_PROFIT_PERCENT, 'TAKE_PROFIT_PERCENT', 5)
 const MAX_POSITION_PERCENT = ensureValidNumeric(process.env.MAX_POSITION_PERCENT, 'MAX_POSITION_PERCENT', 5)
 const DRAWDOWN_KILL_PERCENT = ensureValidNumeric(process.env.DRAWDOWN_KILL_PERCENT, 'DRAWDOWN_KILL_PERCENT', 10)
+const MAX_CAPITAL_USDT = ensureValidNumeric(process.env.MAX_CAPITAL_USDT, 'MAX_CAPITAL_USDT', 0) // 0 = disabled
+const MAX_BTC_INVENTORY = ensureValidNumeric(process.env.MAX_BTC_INVENTORY, 'MAX_BTC_INVENTORY', 0) // 0 = disabled
+const MAX_DAILY_LOSS_PERCENT = ensureValidNumeric(process.env.MAX_DAILY_LOSS_PERCENT, 'MAX_DAILY_LOSS_PERCENT', 0) // 0 = disabled
+const RISK_DAY_TIMEZONE = process.env.RISK_DAY_TIMEZONE || 'America/Monterrey'
 const MAX_OPEN_GRID_ORDERS = ensureValidNumeric(process.env.MAX_OPEN_GRID_ORDERS, 'MAX_OPEN_GRID_ORDERS', 10)
 const TRAILING_TP_PERCENT = ensureValidNumeric(process.env.TRAILING_TP_PERCENT, 'TRAILING_TP_PERCENT', 0)
 const FEE_RATE = ensureValidNumeric(process.env.FEE_RATE, 'FEE_RATE', 0.001)
@@ -158,6 +165,10 @@ module.exports = {
     DRY_RUN,
     MAX_POSITION_PERCENT,
     DRAWDOWN_KILL_PERCENT,
+    MAX_CAPITAL_USDT,
+    MAX_BTC_INVENTORY,
+    MAX_DAILY_LOSS_PERCENT,
+    RISK_DAY_TIMEZONE,
     MAX_OPEN_GRID_ORDERS,
     TRAILING_TP_PERCENT,
     FEE_RATE,
