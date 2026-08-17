@@ -139,6 +139,7 @@ async function updateDynamicGrid(currentPrice) {
 }
 
 let isProcessingTick = false
+let reconcileConsecutiveErrors = 0
 
 // === BUCLE PRINCIPAL ===
 
@@ -171,11 +172,26 @@ async function broadcast() {
             try {
                 try {
                     await reconcileBalances(getBalances, 1)
+                    if (reconcileConsecutiveErrors > 0) {
+                        logColor(colors.green, '[CIRCUIT BREAKER] Reconciliación de saldos recuperada exitosamente.')
+                        _notifyTelegram(null, 'buy') // Notifica la recuperación (verde)
+                        reconcileConsecutiveErrors = 0
+                    }
                 } catch (balanceErr) {
-                    logColor(colors.red, `[CRITICAL] Reconciliacion de saldos fallida: ${balanceErr.message || balanceErr}`)
-                    _notifyTelegram(null, 'risk')
-                    await emergencyCleanUp()
-                    process.exit(1)
+                    reconcileConsecutiveErrors++
+                    if (reconcileConsecutiveErrors >= 3) {
+                        logColor(colors.red, `[CRITICAL] Reconciliacion de saldos fallida 3 veces: ${balanceErr.message || balanceErr}`)
+                        _notifyTelegram(null, 'risk')
+                        await emergencyCleanUp()
+                        process.exit(1)
+                    } else {
+                        logColor(colors.yellow, `[DEGRADED] Reconciliacion de saldos fallida (${reconcileConsecutiveErrors}/3): ${balanceErr.message || balanceErr}. Reintentando en el próximo ciclo...`)
+                        if (reconcileConsecutiveErrors === 1) {
+                            _notifyTelegram(null, 'risk') // Notifica la entrada al estado DEGRADED
+                        }
+                        await sleep(POLL_INTERVAL_MS)
+                        continue // Saltar evaluación de este ciclo
+                    }
                 }
 
             const now = Date.now()
@@ -387,12 +403,35 @@ async function init() {
                 const order = await client.getOrder({ symbol: MARKET, origClientOrderId: intent.clientOrderId })
                 if (order && (order.status === 'FILLED' || order.status === 'PARTIALLY_FILLED')) {
                     console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} confirmado en Binance. Reconciliando estado local.`)
-                    const fillPrice = parseFloat(order.fills?.[0]?.price || order.price || 0)
-                    const fillFee = parseFloat(order.fills?.[0]?.commission || 0)
-                    updateIntent(intent.clientOrderId, 'CONFIRMED', fillPrice, fillFee)
+                    let fillPrice = parseFloat(order.price || 0)
+                    let fillFee = 0
+                    let commissionAsset = null
+                    
+                    try {
+                        const trades = await client.myTrades({ symbol: MARKET, orderId: order.orderId })
+                        if (trades && trades.length > 0) {
+                            let totalCost = 0
+                            let totalQty = 0
+                            for (const trade of trades) {
+                                totalCost += parseFloat(trade.price) * parseFloat(trade.qty)
+                                totalQty += parseFloat(trade.qty)
+                                fillFee += parseFloat(trade.commission)
+                                commissionAsset = trade.commissionAsset
+                            }
+                            if (totalQty > 0) fillPrice = totalCost / totalQty
+                        }
+                    } catch (e) {
+                        console.error(`[BOOTSTRAP WARN] No se pudo obtener myTrades para la orden ${order.orderId}: ${e.message}`)
+                    }
+                    
+                    updateIntent(intent.clientOrderId, 'CONFIRMED', fillPrice, fillFee, order.executedQty, commissionAsset, order.orderId)
                     intent.price = fillPrice
+                    intent.fee = fillFee
+                    intent.executedQty = order.executedQty
+                    intent.commissionAsset = commissionAsset
+                    intent.orderId = order.orderId
                     await recoverPendingIntent(intent, { store, getBalances })
-                    logColor(colors.yellow, `[BOOTSTRAP] Crash recuperado. Orden ${intent.clientOrderId} ejecutada offline.`)
+                    logColor(colors.yellow, `[BOOTSTRAP] Crash recuperado. Orden ${intent.clientOrderId} ejecutada offline con cantidad ${order.executedQty}.`)
                 } else {
                     updateIntent(intent.clientOrderId, 'FAILED')
                 }

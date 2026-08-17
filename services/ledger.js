@@ -20,6 +20,9 @@ db.exec(`
         amount TEXT NOT NULL,
         price TEXT,
         fee TEXT,
+        executedQty TEXT,
+        commissionAsset TEXT,
+        orderId TEXT,
         status TEXT NOT NULL,
         timestamp INTEGER NOT NULL
     );
@@ -36,10 +39,13 @@ try {
                 amount TEXT NOT NULL,
                 price TEXT,
                 fee TEXT,
+                executedQty TEXT,
+                commissionAsset TEXT,
+                orderId TEXT,
                 status TEXT NOT NULL,
                 timestamp INTEGER NOT NULL
             );
-            INSERT INTO order_intents_new SELECT clientOrderId, symbol, side, amount, price, fee, status, timestamp FROM order_intents;
+            INSERT INTO order_intents_new (clientOrderId, symbol, side, amount, price, fee, status, timestamp) SELECT clientOrderId, symbol, side, amount, price, fee, status, timestamp FROM order_intents;
             DROP TABLE order_intents;
             ALTER TABLE order_intents_new RENAME TO order_intents;
         `)
@@ -48,6 +54,9 @@ try {
 
 try { db.exec("ALTER TABLE order_intents ADD COLUMN price TEXT;") } catch (e) {}
 try { db.exec("ALTER TABLE order_intents ADD COLUMN fee TEXT;") } catch (e) {}
+try { db.exec("ALTER TABLE order_intents ADD COLUMN executedQty TEXT;") } catch (e) {}
+try { db.exec("ALTER TABLE order_intents ADD COLUMN commissionAsset TEXT;") } catch (e) {}
+try { db.exec("ALTER TABLE order_intents ADD COLUMN orderId TEXT;") } catch (e) {}
 
 function logIntent(orderObject) {
     const amountValue = orderObject.quantity ?? orderObject.quoteOrderQty ?? 0
@@ -69,7 +78,7 @@ function logIntent(orderObject) {
     return orderObject.newClientOrderId
 }
 
-function updateIntent(clientOrderId, status, price, fee) {
+function updateIntent(clientOrderId, status, price, fee, executedQty, commissionAsset, orderId) {
     let sql = 'UPDATE order_intents SET status = ?'
     const params = [status]
     if (price !== undefined && price !== null) {
@@ -79,6 +88,18 @@ function updateIntent(clientOrderId, status, price, fee) {
     if (fee !== undefined && fee !== null) {
         sql += ', fee = ?'
         params.push(String(fee))
+    }
+    if (executedQty !== undefined && executedQty !== null) {
+        sql += ', executedQty = ?'
+        params.push(String(executedQty))
+    }
+    if (commissionAsset !== undefined && commissionAsset !== null) {
+        sql += ', commissionAsset = ?'
+        params.push(String(commissionAsset))
+    }
+    if (orderId !== undefined && orderId !== null) {
+        sql += ', orderId = ?'
+        params.push(String(orderId))
     }
     sql += ' WHERE clientOrderId = ?'
     params.push(clientOrderId)
@@ -134,7 +155,7 @@ function reconstructStoreFromSQLite({ symbol, store, currentPrice, balances }) {
         if (item.side === 'BUY') {
             activeOrders.push({
                 id: item.clientOrderId,
-                amount: item.amount,
+                amount: item.executedQty || item.amount,
                 buy_price: item.price || currentPrice,
                 buy_fee: parseFloat(item.fee || 0),
                 status: 'open',

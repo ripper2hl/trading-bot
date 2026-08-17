@@ -13,7 +13,7 @@ services:
       - MARKET1=BTC
       - MARKET2=USDT
       - BUY_ORDER_AMOUNT=15
-      - RESUME=false
+      - RESUME=true
     user: "${UID:-1000}:${GID:-1000}"
     volumes:
       # Persistir datos y logs en tu host para que no se pierdan si el contenedor muere
