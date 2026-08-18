@@ -51,11 +51,17 @@ async function marketOrder(side, amount, quoted) {
     if (DRY_RUN) {
         const simPrice = await getPrice(MARKET)
         if (!simPrice) return null
+        const dAmount = new Decimal(amount)
+        const dSimPrice = new Decimal(simPrice)
+        const dFeeRate = new Decimal(FEE_RATE)
 
-        const simQty = quoted ? (amount / simPrice) : amount
-        const simCommission = side === 'BUY'
-            ? simQty * FEE_RATE
-            : simQty * simPrice * FEE_RATE
+        const dSimQty = quoted ? dAmount.dividedBy(dSimPrice) : dAmount
+        const simQty = dSimQty.toNumber()
+
+        const dSimCommission = side === 'BUY'
+            ? dSimQty.times(dFeeRate)
+            : dSimQty.times(dSimPrice).times(dFeeRate)
+        const simCommission = dSimCommission.toNumber()
         const commissionAsset = side === 'BUY' ? MARKET1 : MARKET2
 
         const simResult = {
@@ -76,9 +82,6 @@ async function marketOrder(side, amount, quoted) {
 
         const curM1 = new Decimal(store.get(m1Key) || 0)
         const curM2 = new Decimal(store.get(m2Key) || 0)
-        const dSimQty = new Decimal(simQty)
-        const dSimCommission = new Decimal(simCommission)
-        const dSimPrice = new Decimal(simPrice)
 
         if (side === 'BUY') {
             // TODO: DECIMAL_BRIDGE (state.js store balances require Number right now)
