@@ -210,18 +210,32 @@ async function broadcast() {
             }
             const startPrice = store.get('start_price')
 
-            const dynBuy = parseFloat(store.get('dynamic_buy_percent')) || BUY_PERCENT
-            const dynSell = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
+            const dynBuyRaw = store.get('dynamic_buy_percent') || BUY_PERCENT
+            const dDynBuy = new Decimal(dynBuyRaw)
+            const dynBuy = dDynBuy.toNumber()
+
+            const dynSellRaw = store.get('dynamic_sell_percent') || SELL_PERCENT
+            const dDynSell = new Decimal(dynSellRaw)
+            const dynSell = dDynSell.toNumber()
 
             console.clear()
             if (DRY_RUN) logColor(colors.yellow, '>>> MODO DRY-RUN ACTIVO (sin ordenes reales) <<<')
             log(`Running Time: ${elapsedTime()}`)
             logColor(colors.cyan, `ATR (15m): $${currentATR.toFixed(2)} | Grid Dinámico: Buy ${dynBuy.toFixed(2)}% / Sell ${dynSell.toFixed(2)}%`)
-            const totalProfits = parseFloat(store.get('profits')) || 0
-            const baselineEquity = parseFloat(store.get('strategy_baseline_equity')) || parseFloat(store.get(`initial_${MARKET2.toLowerCase()}_balance`)) || 0
-            const totalProfitsPercent = baselineEquity > 0
-                ? parseFloat((100 * totalProfits / baselineEquity).toFixed(3))
-                : 0
+            const profitsStoreRaw = store.get('profits')
+            if (profitsStoreRaw === undefined || profitsStoreRaw === null || profitsStoreRaw === '') throw new Error('[FAIL-CLOSED] Valor vacío o nulo para profits')
+            const dTotalProfits = new Decimal(profitsStoreRaw)
+            if (dTotalProfits.isNaN() || !dTotalProfits.isFinite()) throw new Error(`[FAIL-CLOSED] Valor no finito o NaN para profits: ${profitsStoreRaw}`)
+
+            const baselineRaw = store.get('strategy_baseline_equity') || store.get(`initial_${MARKET2.toLowerCase()}_balance`)
+            if (baselineRaw === undefined || baselineRaw === null || baselineRaw === '') throw new Error('[FAIL-CLOSED] Valor vacío o nulo para strategy_baseline_equity')
+            const dBaselineEquity = new Decimal(baselineRaw)
+            if (dBaselineEquity.isNaN() || !dBaselineEquity.isFinite() || dBaselineEquity.lessThanOrEqualTo(0)) throw new Error(`[FAIL-CLOSED] Baseline equity inválido o <= 0: ${baselineRaw}`)
+
+            const totalProfits = dTotalProfits.toNumber()
+
+            const dTotalProfitsPercent = dTotalProfits.dividedBy(dBaselineEquity).times(100)
+            const totalProfitsPercent = dTotalProfitsPercent.toNumber()
 
             const currentEquity = getCurrentEquity(marketPrice)
             const equityCurve = getTradingEquityCurve(marketPrice)
@@ -249,7 +263,7 @@ async function broadcast() {
                     logColor(totalProfits < 0 ? colors.red : totalProfits == 0 ? colors.gray : colors.green,
                         `Real Profits [SL = ${STOP_LOSS_PERCENT}%, TP = ${TAKE_PROFIT_PERCENT}%]: ${totalProfitsPercent}% ==> ${totalProfits <= 0 ? '' : '+'}${parseFloat(totalProfits).toFixed(3)} ${MARKET2}`)
 
-                    if (totalProfitsPercent >= TAKE_PROFIT_PERCENT) {
+                    if (dTotalProfitsPercent.greaterThanOrEqualTo(new Decimal(TAKE_PROFIT_PERCENT))) {
                         logColor(colors.green, 'Cerrando bot en ganancias....')
                         if (SELL_ALL_ON_CLOSE) {
                             if (WITHDRAW_PROFITS_ENABLED
@@ -271,7 +285,7 @@ async function broadcast() {
                         } else {
                             return
                         }
-                    } else if (totalProfitsPercent <= -STOP_LOSS_PERCENT) {
+                    } else if (dTotalProfitsPercent.lessThanOrEqualTo(new Decimal(-STOP_LOSS_PERCENT))) {
                         logColor(colors.red, 'Cerrando bot en pérdidas....')
                         if (SELL_ALL_ON_CLOSE)
                             await _sellAll()
@@ -301,7 +315,6 @@ async function broadcast() {
                     store.put('percent', `-${parseFloat(percent).toFixed(3)}`)
 
                     const dPercent = new Decimal(percent)
-                    const dDynBuy = new Decimal(dynBuy)
 
                     if (dPercent.greaterThanOrEqualTo(dDynBuy))
                         await _buy(marketPrice, BUY_ORDER_AMOUNT, updateBalances, _notifyTelegram)
@@ -414,6 +427,17 @@ async function init() {
         logColor(colors.red, '[BOOTSTRAP] Kill-switch restaurado desde el store: operaciones bloqueadas por drawdown previo.')
     }
 
+    try {
+        logColor(colors.yellow, '[BOOTSTRAP] Forzando sincronización universal de saldos con Binance...')
+        const bootstrapBalances = await getBalances()
+        if (MARKET1) store.put(`${MARKET1.toLowerCase()}_balance`, bootstrapBalances[MARKET1] || 0)
+        if (MARKET2) store.put(`${MARKET2.toLowerCase()}_balance`, bootstrapBalances[MARKET2] || 0)
+        logColor(colors.green, `[BOOTSTRAP] Saldos reales en memoria: ${bootstrapBalances[MARKET1] || 0} ${MARKET1} | ${bootstrapBalances[MARKET2] || 0} ${MARKET2}`)
+    } catch (err) {
+        console.error('[BOOTSTRAP FATAL] No se pudo obtener el saldo real de Binance al arrancar:', err.message)
+        process.exit(1)
+    }
+
     const pendingIntents = getPendingIntents()
     if (pendingIntents.length > 0) {
         console.error('[BOOTSTRAP] Detectados intents PENDING en el ledger: posible crash detectado.')
@@ -422,26 +446,48 @@ async function init() {
                 const order = await client.getOrder({ symbol: MARKET, origClientOrderId: intent.clientOrderId })
                 if (order && (order.status === 'FILLED' || order.status === 'PARTIALLY_FILLED')) {
                     console.warn(`[BOOTSTRAP] Intent ${intent.clientOrderId} confirmado en Binance. Reconciliando estado local.`)
-                    let fillPrice = parseFloat(order.price || 0)
-                    let fillFee = 0
+                    let dFillPrice = null
+                    let dFillFee = new Decimal(0)
                     let commissionAsset = null
 
                     try {
                         const trades = await client.myTrades({ symbol: MARKET, orderId: order.orderId })
                         if (trades && trades.length > 0) {
-                            let totalCost = 0
-                            let totalQty = 0
+                            let dTotalCost = new Decimal(0)
+                            let dTotalQty = new Decimal(0)
                             for (const trade of trades) {
-                                totalCost += parseFloat(trade.price) * parseFloat(trade.qty)
-                                totalQty += parseFloat(trade.qty)
-                                fillFee += parseFloat(trade.commission)
+                                const dTradePrice = new Decimal(trade.price)
+                                const dTradeQty = new Decimal(trade.qty)
+                                const dTradeCommission = new Decimal(trade.commission)
+
+                                dTotalCost = dTotalCost.plus(dTradePrice.times(dTradeQty))
+                                dTotalQty = dTotalQty.plus(dTradeQty)
+                                dFillFee = dFillFee.plus(dTradeCommission)
                                 commissionAsset = trade.commissionAsset
                             }
-                            if (totalQty > 0) fillPrice = totalCost / totalQty
+                            if (dTotalQty.greaterThan(0)) {
+                                dFillPrice = dTotalCost.dividedBy(dTotalQty)
+                            }
                         }
                     } catch (e) {
                         console.error(`[BOOTSTRAP WARN] No se pudo obtener myTrades para la orden ${order.orderId}: ${e.message}`)
                     }
+
+                    if (!dFillPrice) {
+                        if (order.price !== undefined && order.price !== null && order.price !== '') {
+                            const dOrderPrice = new Decimal(order.price)
+                            if (!dOrderPrice.isNaN() && dOrderPrice.isFinite() && dOrderPrice.greaterThan(0)) {
+                                dFillPrice = dOrderPrice
+                            }
+                        }
+                    }
+
+                    if (!dFillPrice) {
+                        throw new Error(`[FAIL-CLOSED] No se pudo reconstruir un fillPrice válido para el intent ${intent.clientOrderId}`)
+                    }
+
+                    const fillPrice = dFillPrice.toNumber()
+                    const fillFee = dFillFee.toNumber()
 
                     updateIntent(intent.clientOrderId, 'CONFIRMED', fillPrice, fillFee, order.executedQty, commissionAsset, order.orderId)
                     intent.price = fillPrice
@@ -465,10 +511,19 @@ async function init() {
 
                 if (isOrderMissing) {
                     const balances = await getBalances()
-                    const localBase = parseFloat(store.get(`${MARKET1.toLowerCase()}_balance`)) || 0
-                    const realBase = parseFloat(balances[MARKET1]) || 0
+                    const localBaseRaw = store.get(`${MARKET1.toLowerCase()}_balance`)
+                    if (localBaseRaw === undefined || localBaseRaw === null) throw new Error('[FAIL-CLOSED] localBase nulo o vacío en validación de cuarentena')
+                    const dLocalBase = new Decimal(localBaseRaw)
 
-                    if (intent.side === 'BUY' && (realBase - localBase) > BALANCE_ABSOLUTE_TOLERANCE_BASE) {
+                    const realBaseRaw = balances[MARKET1]
+                    if (realBaseRaw === undefined || realBaseRaw === null) throw new Error('[FAIL-CLOSED] realBase nulo o vacío en validación de cuarentena')
+                    const dRealBase = new Decimal(realBaseRaw)
+                    const dToleranceBase = new Decimal(BALANCE_ABSOLUTE_TOLERANCE_BASE)
+
+                    const localBase = dLocalBase.toNumber()
+                    const realBase = dRealBase.toNumber()
+
+                    if (intent.side === 'BUY' && dRealBase.minus(dLocalBase).greaterThan(dToleranceBase)) {
                         console.error(`[QUARANTINE] Intent ${intent.clientOrderId} retornó NOT_FOUND pero el saldo en Binance (${realBase} ${MARKET1}) supera al local (${localBase}). Cuarentena activada para evitar sobre-compras.`)
                         await emergencyCleanUp()
                         process.exit(1)

@@ -154,7 +154,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
     if (dCurrentBalance.greaterThanOrEqualTo(dBuyOrderAmount)) {
         const activeOrders = store.get('orders') || []
 
-        const dynamicSellPercent = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
+        const dynamicSellPercent = store.get('dynamic_sell_percent') || SELL_PERCENT
         const dDynamicSellPercent = new Decimal(dynamicSellPercent)
         const dTargetNetPercent = dDynamicSellPercent.dividedBy(100)
 
@@ -208,7 +208,7 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
             const dBuyPrice = new Decimal(res.fills[0].price)
             order.buy_price = dBuyPrice.toNumber()
 
-            const dynamicSellPercent = parseFloat(store.get('dynamic_sell_percent')) || SELL_PERCENT
+            const dynamicSellPercent = store.get('dynamic_sell_percent') || SELL_PERCENT
             const dDynamicSellPercent = new Decimal(dynamicSellPercent)
             const dTargetNetPercent = dDynamicSellPercent.dividedBy(100)
 
@@ -225,9 +225,11 @@ async function _buy(price, amount, updateBalancesFn, notifyFn) {
                 return
             }
 
+            // Actualizamos primero el balance real para acotar la ventana de desincronizacion
+            await updateBalancesFn()
+
             activeOrders.push(order)
             store.put('start_price', order.buy_price)
-            await updateBalancesFn()
 
             store.put('total_buys', (parseInt(store.get('total_buys')) || 0) + 1)
 
